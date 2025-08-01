@@ -116,7 +116,7 @@ def create_single_fluence_plots(df, depth_col, depth_label, plot_type, mode, y_a
                     marker=dict(size=8, color=exp_colors[i % len(exp_colors)], symbol='diamond'),
                     showlegend=True
                 ))
-        reduced_fluence = selected_fluence / 10
+        reduced_fluence = {selected_fluence:.1f} / 10
 
         formatted_value = f"{reduced_fluence / 1e16:.1f}×10¹⁶ atoms/cm²"
         fig.update_layout(
