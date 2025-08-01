@@ -876,9 +876,6 @@ def main():
                     st.write("❌ No data lines found")
 
                 return
-
-            st.success(f"✅ Successfully loaded data for {len(fluence_data)} fluence steps")
-
             st.sidebar.header("Plot Controls")
 
             fluence_values = sorted(fluence_data.keys())
