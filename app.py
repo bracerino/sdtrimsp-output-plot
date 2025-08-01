@@ -781,7 +781,7 @@ def main():
     st.title("📊 SDTrimSP Data Plotter")
     st.markdown("Upload your SDTrimSP output file to visualize concentration profiles and density distributions")
 
-    uploaded_file = st.file_uploader("Choose SDTrimSP output file", type=['txt, data, dat, csv'])
+    uploaded_file = st.file_uploader("Choose SDTrimSP output file")
 
     if uploaded_file is None:
         st.info("👆 Please upload your SDTrimSP output file above")
