@@ -958,7 +958,7 @@ def main():
                     st.session_state.show_analysis = True
 
             with col_analysis2:
-                if st.button("📈 Profile Plots", type="secondary", use_container_width=True):
+                if st.button("📈 Profile Plots", type="primary", use_container_width=True):
                     st.session_state.show_analysis = False
 
             if 'show_analysis' not in st.session_state:
