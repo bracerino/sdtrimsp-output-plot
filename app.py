@@ -1104,5 +1104,5 @@ The file should contain sections like:
                 st.text(f"{i + 1:2d}: {line}")
 
 
-if __name__ == "__main__":
-    main()
+
+main()
