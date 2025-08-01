@@ -781,21 +781,11 @@ def main():
     st.title("📊 SDTrimSP Data Plotter")
     st.markdown("Upload your SDTrimSP output file to visualize concentration profiles and density distributions")
 
-    uploaded_file = st.file_uploader("Choose SDTrimSP output file", type=['txt'])
+    uploaded_file = st.file_uploader("Choose SDTrimSP output file", type=['txt, data, dat, csv'])
 
     if uploaded_file is None:
         st.info("👆 Please upload your SDTrimSP output file above")
         st.markdown("### Expected File Format")
-        st.code("""
-The file should contain sections like:
-  0.50000000E+00  0.28728300E+01 !--- fluc srrc sbe:   5.60000   4.90000   4.90000
-  ...
-#  center[A]  density[a/A^3]  atomic fraction  
-#  xxx(*)       dns(*)        (qux(*,jp),jp=1,ncp)
-0.500000E+01   0.571479E-01      0.99946  0.00054  0.00000
-0.150000E+02   0.571583E-01      0.99926  0.00074  0.00000
-...
-        """)
         return
 
     if uploaded_file is not None:
