@@ -1,5 +1,9 @@
 # sdtrimsp-output-plot
-SDTrimSP output analysis of depth distributions for simulations of ion implantation. Try the application online at: http://sdtrimsp.streamlit.app/
+SDTrimSP output analysis of depth distributions for simulations of ion implantation. Try the application online at: http://sdtrimsp.streamlit.app/.
+
+### **How to use the app**  
+- Upload the output file from dynamic SDTrimSP ion implantation simulation containing the information about element depth distributions depending on the fluence
+- The app will automatically load the data e
 
 
 ### **Compile the app locally** 
@@ -31,6 +35,9 @@ Open your terminal console and write the following commands (the bold text):
 
 
 ![Plot element depth distributions depending no the fluence from the SDTrimSP](images/1_s.png)
+--
 ![Plot element depth distributions depending no the fluence from the SDTrimSP](images/2_s.png)
+--
 ![Plot element depth distributions depending no the fluence from the SDTrimSP](images/3_s.png)
+--
 
