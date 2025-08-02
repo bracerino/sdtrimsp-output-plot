@@ -30,5 +30,7 @@ Open your terminal console and write the following commands (the bold text):
       **git pull**
 
 
-![MACE GUI Console](images/Mace-2.png)
+![Plot element depth distributions depending no the fluence from the SDTrimSP](images/1_s.png)
+![Plot element depth distributions depending no the fluence from the SDTrimSP](images/2_s.png)
+![Plot element depth distributions depending no the fluence from the SDTrimSP](images/3_s.png)
 
