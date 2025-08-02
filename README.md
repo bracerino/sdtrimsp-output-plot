@@ -2,8 +2,13 @@
 SDTrimSP output analysis of depth distributions for simulations of ion implantation. Try the application online at: http://sdtrimsp.streamlit.app/.
 
 ### **How to use the app**  
-- Upload the output file from dynamic SDTrimSP ion implantation simulation containing the information about element depth distributions depending on the fluence
-- The app will automatically load the data e
+- Upload the output file from dynamic SDTrimSP ion implantation simulation containing the information about element depth distributions depending on the fluence  
+- The app will automatically load  
+- You can then select the concentrations (either in atomic fraction or atoms/cm3 units) or target density to plot it for specific fluence  
+- Download the profiles  
+- Compare different fuences with each other in one plot  
+- Upload two-column data with e.g. experimental profiles for direct comparison  
+- Automatically obtain dependence of concentrations maxima, their depth positions, and FWHM on the fluence   
 
 
 ### **Compile the app locally** 
