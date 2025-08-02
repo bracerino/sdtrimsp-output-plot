@@ -28,3 +28,7 @@ Open your terminal console and write the following commands (the bold text):
       **streamlit run app.py**
 7) To update the application, write in the main folder:  
       **git pull**
+
+
+![MACE GUI Console](images/Mace-2.png)
+
