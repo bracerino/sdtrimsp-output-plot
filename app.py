@@ -785,7 +785,39 @@ def main():
 
     if uploaded_file is None:
         st.info("👆 Please upload your SDTrimSP output file above")
-        st.markdown("### Expected File Format")
+        st.markdown("""
+        ### 📁 How to Use This App
+        
+        If you find a bug or have questions, feel free to contact me at **[lebedmi2@cvut.cz](mailto:lebedmi2@cvut.cz)**  
+        📺 *Illustrative video tutorial:* [Watch on YouTube](https://youtu.be/JBXGyuHMtGk?si=Twj-2FA28ogJ1jUr)
+        
+        ---
+        
+        #### 📤 Input Requirements:
+        Upload the **output file** from a **dynamic SDTrimSP ion implantation simulation** containing data about **element depth distributions as a function of fluence**.
+        
+        ✅ The app will **automatically load all data**.
+        
+        ---
+        
+        #### 📊 What You Can Do:
+        - 📈 **Select and plot** depth concentration distributions:
+          - in **atomic fraction**
+          - or in **atoms/cm³**
+        - 🧪 Plot **target density** vs. fluence
+        - 📉 **Compare multiple fluences** in a single plot
+        - 🔄 Upload **two-column data** (e.g., experimental profiles) for **direct comparison**
+        - 📌 Automatically calculate:
+          - **Maximum concentration values**
+          - **Depth positions of maxima**
+          - **FWHM (Full Width at Half Maximum)** as a function of fluence
+        - 💾 **Download profiles** for further analysis
+        
+        ---
+        
+        Enjoy using the app!
+        """)
+
         return
 
     if uploaded_file is not None:
