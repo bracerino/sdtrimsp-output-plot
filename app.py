@@ -222,7 +222,7 @@ def create_single_fluence_plots(df, depth_col, depth_label, plot_type, mode, y_a
             yaxis=dict(tickfont=dict(size=20, color='black'))
         )
 
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width='stretch')
 
 
 def create_multi_fluence_comparison(fluence_data, selected_fluences, depth_col, depth_label, plot_type, mode,
@@ -380,7 +380,7 @@ def create_multi_fluence_comparison(fluence_data, selected_fluences, depth_col, 
         yaxis=dict(tickfont=dict(size=22, color='black'))
     )
 
-    st.plotly_chart(comparison_fig, use_container_width=True)
+    st.plotly_chart(comparison_fig, width='stretch')
 
 
 def perform_fluence_analysis(fluence_data, element_names, fluence_unit, selected_elements, smooth_data, smooth_sigma,
@@ -520,7 +520,7 @@ def perform_fluence_analysis(fluence_data, element_names, fluence_unit, selected
             xaxis=dict(tickfont=dict(size=18, color='black')),
             yaxis=dict(tickfont=dict(size=18, color='black'))
         )
-        st.plotly_chart(fig_max, use_container_width=True)
+        st.plotly_chart(fig_max, width='stretch')
 
     with col2:
         st.write(f"**Depth of Maximum vs Fluence{smoothing_note}**")
@@ -546,7 +546,7 @@ def perform_fluence_analysis(fluence_data, element_names, fluence_unit, selected
             xaxis=dict(tickfont=dict(size=18, color='black')),
             yaxis=dict(tickfont=dict(size=18, color='black'))
         )
-        st.plotly_chart(fig_depth, use_container_width=True)
+        st.plotly_chart(fig_depth, width='stretch')
 
     with col3:
         st.write(f"**FWHM vs Fluence{smoothing_note}**")
@@ -572,7 +572,7 @@ def perform_fluence_analysis(fluence_data, element_names, fluence_unit, selected
             xaxis=dict(tickfont=dict(size=18, color='black')),
             yaxis=dict(tickfont=dict(size=18, color='black'))
         )
-        st.plotly_chart(fig_fwhm, use_container_width=True)
+        st.plotly_chart(fig_fwhm, width='stretch')
 
     st.write(f"**Summary Table{smoothing_note}**")
     summary_data = []
@@ -593,7 +593,7 @@ def perform_fluence_analysis(fluence_data, element_names, fluence_unit, selected
                     })
 
     summary_df = pd.DataFrame(summary_data)
-    st.dataframe(summary_df, use_container_width=True)
+    st.dataframe(summary_df, width='stretch')
 
     csv = summary_df.to_csv(index=False)
     filename_suffix = "_smoothed" if smooth_data else ""
@@ -781,9 +781,312 @@ def main():
     st.title("📊 SDTrimSP Data Plotter")
     st.markdown("Upload your SDTrimSP output file to visualize concentration profiles and density distributions")
 
+    from static_mode import create_static_mode_interface
+    if create_static_mode_interface():
+        return
     uploaded_file = st.file_uploader("Choose SDTrimSP output file")
 
     if uploaded_file is None:
+
+        st.sidebar.markdown("---")
+        st.sidebar.subheader("🔄 POSCAR/CIF to crystal.inp")
+        convert_crystal = st.sidebar.checkbox("Convert POSCAR/CIF to crystal.inp")
+
+        if convert_crystal:
+            st.markdown("### 🔄 Crystal Structure File Converter")
+            st.sidebar.info("Upload POSCAR, .cif, or crystal.inp file for conversion and reorientation")
+
+            crystal_file = st.sidebar.file_uploader("Upload POSCAR/CIF or crystal.inp",
+                                            key="crystal_converter",
+                                            accept_multiple_files=False)
+
+            if crystal_file is not None:
+                file_content = str(crystal_file.read(), "utf-8")
+                lines = file_content.strip().split('\n')
+
+                file_type = None
+                if 'crystal.inp' in crystal_file.name.lower() or '.inp' in crystal_file.name.lower():
+                    if len(lines) > 3 and lines[1].strip().isdigit():
+                        file_type = "crystal.inp"
+                elif 'cif' in crystal_file.name.lower() or any('_cell_length' in line for line in lines[:20]):
+                    file_type = "cif"
+                elif len(lines) > 7:
+                    try:
+                        float(lines[1].strip())
+                        file_type = "POSCAR"
+                    except:
+                        pass
+
+                if file_type:
+                    st.success(f"✅ Detected file format: **{file_type}**")
+                else:
+                    st.error("❌ Could not detect file format")
+                    st.stop()
+
+                try:
+                    import numpy as np
+
+                    if file_type == "crystal.inp":
+                        crystal_name = lines[0].strip()
+                        num_species = int(lines[2].strip())
+
+                        elements = []
+                        line_idx = 3
+                        for i in range(num_species):
+                            elem = lines[line_idx].strip().strip('"').strip("'")
+                            elements.append(elem)
+                            line_idx += 1
+
+                        v1 = [float(x) for x in lines[line_idx].split()]
+                        v2 = [float(x) for x in lines[line_idx + 1].split()]
+                        v3 = [float(x) for x in lines[line_idx + 2].split()]
+                        line_idx += 3
+
+                        num_atoms = int(lines[line_idx].strip())
+                        line_idx += 1
+
+                        positions = []
+                        for i in range(num_atoms):
+                            pos_data = lines[line_idx].split()
+                            x, y, z = float(pos_data[0]), float(pos_data[1]), float(pos_data[2])
+                            elem_idx = int(pos_data[3])
+                            positions.append([x, y, z, elem_idx])
+                            line_idx += 1
+
+                    elif file_type == "cif":
+                        a = b = c = 1.0
+                        alpha = beta = gamma = 90.0
+                        elements = []
+                        positions = []
+
+                        for line in lines:
+                            if '_cell_length_a' in line:
+                                a = float(line.split()[1].split('(')[0])
+                            elif '_cell_length_b' in line:
+                                b = float(line.split()[1].split('(')[0])
+                            elif '_cell_length_c' in line:
+                                c = float(line.split()[1].split('(')[0])
+                            elif '_cell_angle_alpha' in line:
+                                alpha = float(line.split()[1].split('(')[0])
+                            elif '_cell_angle_beta' in line:
+                                beta = float(line.split()[1].split('(')[0])
+                            elif '_cell_angle_gamma' in line:
+                                gamma = float(line.split()[1].split('(')[0])
+
+                        in_atom_site = False
+                        for i, line in enumerate(lines):
+                            if '_atom_site_fract_x' in line or '_atom_site_type_symbol' in line:
+                                in_atom_site = True
+                                continue
+                            if in_atom_site and line.strip() and not line.startswith('_') and not line.startswith('#'):
+                                parts = line.split()
+                                if len(parts) >= 4:
+                                    elem = parts[0]
+                                    if elem not in elements:
+                                        elements.append(elem)
+                                    elem_idx = elements.index(elem) + 1
+                                    x = float(parts[1].split('(')[0])
+                                    y = float(parts[2].split('(')[0])
+                                    z = float(parts[3].split('(')[0])
+                                    positions.append([x, y, z, elem_idx])
+
+                        alpha_rad = np.radians(alpha)
+                        beta_rad = np.radians(beta)
+                        gamma_rad = np.radians(gamma)
+
+                        cos_alpha = np.cos(alpha_rad)
+                        cos_beta = np.cos(beta_rad)
+                        cos_gamma = np.cos(gamma_rad)
+                        sin_gamma = np.sin(gamma_rad)
+
+                        v1 = [a, 0, 0]
+                        v2 = [b * cos_gamma, b * sin_gamma, 0]
+                        v3 = [
+                            c * cos_beta,
+                            c * (cos_alpha - cos_beta * cos_gamma) / sin_gamma,
+                            c * np.sqrt(1 - cos_beta ** 2 - ((cos_alpha - cos_beta * cos_gamma) / sin_gamma) ** 2)
+                        ]
+
+                        crystal_name = crystal_file.name.replace('.cif', '').replace('.txt', '')
+
+                    else:
+                        crystal_name = lines[0].strip()
+                        scale = float(lines[1].strip())
+
+                        v1 = [float(x) * scale for x in lines[2].split()]
+                        v2 = [float(x) * scale for x in lines[3].split()]
+                        v3 = [float(x) * scale for x in lines[4].split()]
+
+                        elements = lines[5].split()
+                        counts = [int(x) for x in lines[6].split()]
+
+                        coord_type = lines[7].strip().lower()
+
+                        positions = []
+                        atom_line_start = 8
+                        atom_idx = 0
+
+                        for elem_idx, (elem, count) in enumerate(zip(elements, counts)):
+                            for i in range(count):
+                                pos_line = lines[atom_line_start + atom_idx].split()
+                                x, y, z = float(pos_line[0]), float(pos_line[1]), float(pos_line[2])
+
+                                if coord_type.startswith('c') or coord_type.startswith('k'):
+                                    lat_matrix = np.array([v1, v2, v3]).T
+                                    lat_inv = np.linalg.inv(lat_matrix)
+                                    cart_pos = np.array([x, y, z])
+                                    frac_pos = lat_inv @ cart_pos
+                                    x, y, z = frac_pos
+
+                                positions.append([x, y, z, elem_idx + 1])
+                                atom_idx += 1
+
+                    if len(positions) > 16:
+                        st.warning(
+                            f"⚠️ **Warning:** Your structure has {len(positions)} atoms. SDTrimSP 7.01 supports maximum 16 atoms in crystal.inp")
+
+                    st.markdown("#### 🔄 Crystal Reorientation")
+                    reorient = st.checkbox("Reorient crystal lattice vectors")
+
+                    if reorient:
+                        col_r1, col_r2, col_r3 = st.columns(3)
+
+                        with col_r1:
+                            new_x = st.selectbox("New X direction:", ["a", "b", "c", "-a", "-b", "-c"], index=0,
+                                                 key="new_x")
+                        with col_r2:
+                            new_y = st.selectbox("New Y direction:", ["a", "b", "c", "-a", "-b", "-c"], index=1,
+                                                 key="new_y")
+                        with col_r3:
+                            new_z = st.selectbox("New Z direction:", ["a", "b", "c", "-a", "-b", "-c"], index=2,
+                                                 key="new_z")
+
+                        vector_map = {"a": v1, "b": v2, "c": v3, "-a": [-x for x in v1], "-b": [-x for x in v2],
+                                      "-c": [-x for x in v3]}
+
+                        new_v1 = vector_map[new_x]
+                        new_v2 = vector_map[new_y]
+                        new_v3 = vector_map[new_z]
+
+                        old_matrix = np.array([v1, v2, v3]).T
+                        new_matrix = np.array([new_v1, new_v2, new_v3]).T
+
+                        transformation = np.linalg.inv(old_matrix) @ new_matrix
+
+                        new_positions = []
+                        for pos in positions:
+                            frac_pos = np.array([pos[0], pos[1], pos[2]])
+                            new_frac_pos = np.linalg.inv(transformation.T) @ frac_pos
+
+                            new_frac_pos = new_frac_pos % 1.0
+
+                            new_positions.append([new_frac_pos[0], new_frac_pos[1], new_frac_pos[2], pos[3]])
+
+                        v1, v2, v3 = new_v1, new_v2, new_v3
+                        positions = new_positions
+
+                        st.info(f"Reoriented: X={new_x}, Y={new_y}, Z={new_z}")
+
+                    st.sidebar.markdown("#### 📤 Export Format")
+                    export_format = st.sidebar.radio("Select output format:", ["crystal.inp", "POSCAR"], horizontal=True)
+
+                    if export_format == "crystal.inp":
+                        st.sidebar.markdown("**Cell Extension Parameter**")
+                        cell_extension = st.sidebar.radio("Automatic cell extension:", [3, 5], horizontal=True,
+                                                  help="Controls automatic extension of the crystal cell in SDTrimSP")
+                        st.sidebar.markdown("<small>Only values 3 and 5 are currently supported in 7.01 version</small>",
+                                    unsafe_allow_html=True)
+
+                        crystal_inp = f"{crystal_name}\n"
+                        crystal_inp += "1\n"
+                        crystal_inp += f"{len(elements)}\n"
+
+                        for elem in elements:
+                            crystal_inp += f'"{elem}"\n'
+
+                        crystal_inp += f"{v1[0]:.4f} {v1[1]:.4f} {v1[2]:.4f}\n"
+                        crystal_inp += f"{v2[0]:.4f} {v2[1]:.4f} {v2[2]:.4f}\n"
+                        crystal_inp += f"{v3[0]:.4f} {v3[1]:.4f} {v3[2]:.4f}\n"
+
+                        crystal_inp += f"{len(positions)}\n"
+
+                        for pos in positions:
+                            crystal_inp += f"{pos[0]:.4f} {pos[1]:.4f} {pos[2]:.4f} {pos[3]}\n"
+
+                        crystal_inp += "0.0\n"
+                        crystal_inp += "0.0 0.0\n"
+                        crystal_inp += f"{cell_extension}\n"
+
+                        output_content = crystal_inp
+                        output_filename = f"{crystal_name}_crystal.inp"
+
+                    else:
+                        elem_counts = {}
+                        for pos in positions:
+                            elem_idx = pos[3]
+                            elem_counts[elem_idx] = elem_counts.get(elem_idx, 0) + 1
+
+                        sorted_positions = sorted(positions, key=lambda x: x[3])
+
+                        poscar = f"{crystal_name}\n"
+                        poscar += "1.0\n"
+                        poscar += f"{v1[0]:16.8f} {v1[1]:16.8f} {v1[2]:16.8f}\n"
+                        poscar += f"{v2[0]:16.8f} {v2[1]:16.8f} {v2[2]:16.8f}\n"
+                        poscar += f"{v3[0]:16.8f} {v3[1]:16.8f} {v3[2]:16.8f}\n"
+
+                        poscar += " ".join(elements) + "\n"
+                        poscar += " ".join(str(elem_counts[i + 1]) for i in range(len(elements))) + "\n"
+                        poscar += "Direct\n"
+
+                        for pos in sorted_positions:
+                            poscar += f"{pos[0]:16.8f} {pos[1]:16.8f} {pos[2]:16.8f}\n"
+
+                        output_content = poscar
+                        output_filename = f"{crystal_name}_POSCAR"
+
+                    col1, col2 = st.columns(2)
+
+                    with col1:
+                        st.text_area(f"Preview {export_format}:", output_content, height=400)
+
+                    with col2:
+                        st.download_button(
+                            label=f"📥 Download {export_format}",
+                            data=output_content,
+                            file_name=output_filename,
+                            mime="text/plain",
+                            type = 'primary'
+                        )
+
+                        st.info(f"**Elements:** {', '.join(elements)} "
+                                f"\n\n"
+                                f"**Number of atoms:** {len(positions)}"
+                                f"\n\n"
+                                f"**Lattice vectors (Å):**")
+                        st.code(f"a = [{v1[0]:.4f}, {v1[1]:.4f}, {v1[2]:.4f}]\n"
+                                f"b = [{v2[0]:.4f}, {v2[1]:.4f}, {v2[2]:.4f}]\n"
+                                f"c = [{v3[0]:.4f}, {v3[1]:.4f}, {v3[2]:.4f}]")
+
+                        lengths = [
+                            np.linalg.norm(v1),
+                            np.linalg.norm(v2),
+                            np.linalg.norm(v3)
+                        ]
+                        st.info(f"**Lattice parameters (Å):**")
+                        st.code(f"|a| = {lengths[0]:.4f}\n|b| = {lengths[1]:.4f}\n|c| = {lengths[2]:.4f}")
+
+                except Exception as e:
+                    st.error(f"Error converting file: {str(e)}")
+                    st.info("Please ensure the file is in valid format.")
+                    import traceback
+                    st.code(traceback.format_exc())
+
+            st.markdown("---")
+
+
+
+
+
         st.info("👆 Please upload your SDTrimSP output file above")
         st.markdown("""
         ### 📁 How to Use This App
@@ -986,11 +1289,11 @@ def main():
             col_analysis1, col_analysis2 = st.sidebar.columns(2)
 
             with col_analysis1:
-                if st.button("📊 Fluence Analysis", type="primary", use_container_width=True):
+                if st.button("📊 Fluence Analysis", type="primary", width='stretch'):
                     st.session_state.show_analysis = True
 
             with col_analysis2:
-                if st.button("📈 Profile Plots", type="primary", use_container_width=True):
+                if st.button("📈 Profile Plots", type="primary", width='stretch'):
                     st.session_state.show_analysis = False
 
             if 'show_analysis' not in st.session_state:
@@ -1101,7 +1404,7 @@ def main():
                     if available_cols:
                         display_df = df[available_cols].copy()
                         display_df.columns = available_names
-                        st.dataframe(display_df, use_container_width=True)
+                        st.dataframe(display_df, width='stretch')
 
                         csv = display_df.to_csv(index=False)
                         data_type_name = "fractions" if plot_type == "Atomic Fractions" else "concentrations"
