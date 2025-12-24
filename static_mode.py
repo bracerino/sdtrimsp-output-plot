@@ -198,8 +198,11 @@ def create_static_mode_interface():
 
                 selected_data_to_plot = []
 
-                for file_idx, file_data in enumerate(all_file_data):
-                    with st.expander(f"📄 {file_data['filename']}", expanded=True):
+                tab_names = [f"📄 {file_data['filename']}" for file_data in all_file_data]
+                tabs = st.tabs(tab_names)
+
+                for file_idx, (tab, file_data) in enumerate(zip(tabs, all_file_data)):
+                    with tab:
                         available_elements = list(file_data['elements_data'].keys())
 
                         col1, col2 = st.columns([1, 1])
@@ -208,7 +211,7 @@ def create_static_mode_interface():
                             selected_element = st.selectbox(
                                 f"Select element",
                                 options=['None'] + available_elements,
-                                index=len(available_elements),
+                                index=len(available_elements),  
                                 key=f"element_select_{file_idx}"
                             )
 
