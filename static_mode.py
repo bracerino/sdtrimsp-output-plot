@@ -208,6 +208,7 @@ def create_static_mode_interface():
                             selected_element = st.selectbox(
                                 f"Select element",
                                 options=['None'] + available_elements,
+                                index=len(available_elements),
                                 key=f"element_select_{file_idx}"
                             )
 
