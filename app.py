@@ -824,7 +824,7 @@ def main():
         </style>
         '''
 
-        st.markdown(css, unsafe_allow_html=True)
+    st.markdown(css, unsafe_allow_html=True)
     from static_mode import create_static_mode_interface
     if create_static_mode_interface():
         return
