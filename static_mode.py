@@ -1,6 +1,9 @@
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
+import numpy as np
+from scipy.signal import savgol_filter
+from scipy.ndimage import gaussian_filter1d
 
 
 def parse_static_damage_file(file_content, filename):
@@ -12,11 +15,11 @@ def parse_static_damage_file(file_content, filename):
             font-weight: 600 !important;
             margin: 0 !important;
         }
-        
+
         .stTabs [data-baseweb="tab-list"] {
             gap: 20px !important;
         }
-        
+
         .stTabs [data-baseweb="tab-list"] button {
             background-color: #f0f4ff !important;
             border-radius: 12px !important;
@@ -25,30 +28,29 @@ def parse_static_damage_file(file_content, filename):
             border: none !important;
             color: #1e3a8a !important;
         }
-        
+
         .stTabs [data-baseweb="tab-list"] button:hover {
             background-color: #dbe5ff !important;
             cursor: pointer;
         }
-        
+
         .stTabs [data-baseweb="tab-list"] button[aria-selected="true"] {
             background-color: #e0e7ff !important;
             color: #1e3a8a !important;
             font-weight: 700 !important;
             box-shadow: 0 2px 6px rgba(30, 58, 138, 0.3) !important;
-        
-            /* Added underline (thicker) */
+
             border-bottom: 4px solid #1e3a8a !important;
-            border-radius: 12px 12px 0 0 !important; /* keep rounded only on top */
+            border-radius: 12px 12px 0 0 !important;
         }
-        
+
         .stTabs [data-baseweb="tab-list"] button:focus {
             outline: none !important;
         }
         </style>
         '''
 
-        st.markdown(css, unsafe_allow_html=True)
+    st.markdown(css, unsafe_allow_html=True)
     lines = file_content.strip().split('\n')
 
     elements_data = {}
@@ -135,46 +137,98 @@ def parse_static_damage_file(file_content, filename):
     return elements_data
 
 
-def calculate_atomic_data_static(elements_data, target_density, column_name):
+def calculate_processed_data_static(elements_data, column_name, fluence_per_cm2=None):
     all_depths = set()
     for element_info in elements_data.values():
         for point in element_info['data']:
             all_depths.add(point['depth'])
-
     all_depths = sorted(all_depths)
 
     depth_data = {depth: {} for depth in all_depths}
-
     for element, element_info in elements_data.items():
         for point in element_info['data']:
             depth = point['depth']
             depth_data[depth][element] = point[column_name]
 
     processed_data = {}
+
     for element in elements_data.keys():
+        element_total = sum(
+            point[column_name]
+            for point in elements_data[element]['data']
+        )
+
         processed_data[element] = []
 
-    for depth in all_depths:
-        total_value = sum(depth_data[depth].values())
-
-        for element in elements_data.keys():
+        for depth in all_depths:
             value = depth_data[depth].get(element, 0)
 
-            if total_value > 0:
-                atomic_fraction = value / total_value
-            else:
-                atomic_fraction = 0
+            total_at_depth = sum(depth_data[depth].values())
 
-            concentration = atomic_fraction * target_density * 1e24
+            raw_value = value
+
+            atomic_fraction = value / total_at_depth if total_at_depth > 0 else 0
+
+            probability = value / element_total if element_total > 0 else 0
+
+            density_per_angstrom = value / element_total if element_total > 0 else 0
+
+            if fluence_per_cm2 is not None and element_total > 0:
+                bin_width_angstrom = 1.0
+                bin_width_cm = bin_width_angstrom * 1e-8
+                concentration = (value / element_total) * (fluence_per_cm2 / bin_width_cm)
+            else:
+                concentration = 0
 
             processed_data[element].append({
                 'depth': depth,
-                'raw_value': value,
+                'raw_value': raw_value,
                 'atomic_fraction': atomic_fraction,
+                'probability': probability,
+                'density_per_angstrom': density_per_angstrom,
                 'concentration': concentration
             })
 
     return processed_data
+
+
+def smooth_data(x, y, method='savgol', window=11, poly_order=3, sigma=2.0):
+    if len(y) < window:
+        window = len(y) if len(y) % 2 == 1 else len(y) - 1
+        if window < 3:
+            return y
+
+    if method == 'moving_average':
+        if window % 2 == 0:
+            window += 1
+        half_window = window // 2
+        smoothed = np.convolve(y, np.ones(window) / window, mode='same')
+
+        for i in range(half_window):
+            smoothed[i] = np.mean(y[:i + half_window + 1])
+        for i in range(len(y) - half_window, len(y)):
+            smoothed[i] = np.mean(y[i - half_window:])
+
+        return smoothed
+
+    elif method == 'savgol':
+        if window % 2 == 0:
+            window += 1
+        if window > len(y):
+            window = len(y) if len(y) % 2 == 1 else len(y) - 1
+        if poly_order >= window:
+            poly_order = window - 1
+
+        try:
+            return savgol_filter(y, window, poly_order)
+        except:
+            return y
+
+    elif method == 'gaussian':
+        return gaussian_filter1d(y, sigma)
+
+    else:
+        return y
 
 
 def create_static_mode_interface():
@@ -184,10 +238,33 @@ def create_static_mode_interface():
     use_static_mode = st.sidebar.checkbox("Enable Static Mode", value=False)
 
     if use_static_mode:
-        st.markdown("### 📊 Static Mode: Damage Depth Profiles")
-        st.info("Upload multiple depth_damage.dat or depth_proj.dat files and select elements/columns to plot")
+        st.markdown("### 📊 Static Mode: Depth Profiles")
 
-        uploaded_static_files = st.file_uploader(
+        with st.expander("ℹ️ Understanding the Different Metrics", expanded=False):
+            st.markdown("""
+            **Raw Values**: Direct values from the file (STOPS or VACANCIES counts)
+
+            **Atomic Fraction**: At each depth, what fraction of all events are from this element?
+            - Formula: `value_at_depth / total_all_elements_at_depth`
+            - Sum across all elements at one depth = 1.0
+
+            **Normalized Probability**: What is the probability of finding this ion at this depth?
+            - Formula: `stops_at_depth / total_stops_for_element`
+            - Integral over all depths = 1.0 for each element
+            - **This is the most useful for comparing depth distributions!**
+
+            **Density (ions/Å)**: Ion density per unit depth, normalized per implanted ion
+            - Same as probability but with explicit depth units
+            - Useful for calculating range parameters
+
+            **Concentration (ions/cm³)**: Actual ion concentration (requires fluence input)
+            - Formula: `probability × (fluence / bin_width)`
+            - Only meaningful if you know your implantation fluence
+            """)
+
+        st.sidebar.info("Upload multiple depth_damage.dat or depth_proj.dat files and select elements/columns to plot")
+
+        uploaded_static_files = st.sidebar.file_uploader(
             "Upload depth_damage.dat or depth_proj.dat files",
             type=['dat', 'txt'],
             accept_multiple_files=True,
@@ -206,39 +283,44 @@ def create_static_mode_interface():
                         'filename': uploaded_file.name,
                         'elements_data': elements_data
                     })
-                    st.success(f"✅ {uploaded_file.name}: Found elements: {', '.join(elements_data.keys())}")
+                   # st.success(f"✅ {uploaded_file.name}: Found elements: {', '.join(elements_data.keys())}")
                 else:
                     st.error(f"❌ {uploaded_file.name}: No valid data found")
 
             if all_file_data:
-                st.markdown("---")
-                st.subheader("Plot Settings")
+                #st.markdown("---")
+                #st.subheader("Plot Settings")
 
                 col_settings1, col_settings2 = st.columns(2)
 
                 with col_settings1:
-                    plot_data_type = st.radio(
+                    plot_data_type = st.sidebar.radio(
                         "Data Type to Plot:",
-                        ["Raw Values", "Atomic Fractions", "Concentrations (atoms/cm³)"],
-                        key="static_data_type"
+                        ["Raw Values",
+                         "Atomic Fractions",
+                         "Normalized Probability",
+                         "Density (ions/Å)",
+                         "Concentration (ions/cm³)"],
+                        index=2,
+                        key="static_data_type",
+                        help="Normalized Probability is recommended for comparing distributions"
                     )
 
                 with col_settings2:
-                    if plot_data_type == "Concentrations (atoms/cm³)":
-                        target_density = st.number_input(
-                            "Target Density (atoms/Ų):",
-                            min_value=0.001,
-                            max_value=1.0,
-                            value=0.0565,
-                            step=0.001,
-                            format="%.4f",
-                            help="Typical values: Ti~0.0565, Si~0.05, etc.",
-                            key="static_density"
+                    if plot_data_type == "Concentration (ions/cm³)":
+                        fluence = st.sidebar.number_input(
+                            "Fluence (ions/cm²):",
+                            min_value=1e10,
+                            max_value=1e18,
+                            value=1e15,
+                            format="%.2e",
+                            help="Total number of ions implanted per cm²",
+                            key="static_fluence"
                         )
+                        st.sidebar.caption(f"= {fluence:.2e} ions/cm²")
                     else:
-                        target_density = 0.0565
+                        fluence = None
 
-                st.markdown("---")
                 st.subheader("Select Elements and Columns to Plot")
 
                 selected_data_to_plot = []
@@ -256,7 +338,7 @@ def create_static_mode_interface():
                             selected_element = st.selectbox(
                                 f"Select element",
                                 options=['None'] + available_elements,
-                                index=len(available_elements),  
+                                index=len(available_elements),
                                 key=f"element_select_{file_idx}"
                             )
 
@@ -281,21 +363,12 @@ def create_static_mode_interface():
 
                             column_key = selected_column.lower()
 
-                            if plot_data_type != "Raw Values":
-                                processed_data = calculate_atomic_data_static(
-                                    file_data['elements_data'],
-                                    target_density,
-                                    column_key
-                                )
-                                data_to_use = processed_data[selected_element]
-                            else:
-                                data_to_use = [
-                                    {
-                                        'depth': point['depth'],
-                                        'raw_value': point.get(column_key, 0)
-                                    }
-                                    for point in file_data['elements_data'][selected_element]['data']
-                                ]
+                            processed_data = calculate_processed_data_static(
+                                file_data['elements_data'],
+                                column_key,
+                                fluence
+                            )
+                            data_to_use = processed_data[selected_element]
 
                             selected_data_to_plot.append({
                                 'filename': file_data['filename'],
@@ -309,7 +382,7 @@ def create_static_mode_interface():
                     st.markdown("---")
                     st.subheader("Plot Controls")
 
-                    col1, col2, col3 = st.columns(3)
+                    col1, col2, col3, col4 = st.columns(4)
 
                     with col1:
                         plot_mode = st.radio("Plot Mode:", ["Lines", "Markers", "Lines+Markers"],
@@ -320,6 +393,71 @@ def create_static_mode_interface():
 
                     with col3:
                         x_unit = st.radio("Depth Unit:", ["Angstroms (Å)", "Nanometers (nm)"], key="static_x_unit")
+
+                    with col4:
+                        enable_smoothing = st.checkbox("Enable Smoothing", value=False, key="enable_smooth")
+
+                    if enable_smoothing:
+                        st.markdown("#### Smoothing Settings")
+
+                        smooth_col1, smooth_col2, smooth_col3 = st.columns(3)
+
+                        with smooth_col1:
+                            smooth_method = st.selectbox(
+                                "Smoothing Method:",
+                                ["Savitzky-Golay", "Moving Average", "Gaussian"],
+                                index=0,
+                                key="smooth_method",
+                                help="Savitzky-Golay: Best for preserving peak shapes | Moving Average: Simple smoothing | Gaussian: Smooth but can broaden peaks"
+                            )
+
+                        with smooth_col2:
+                            if smooth_method == "Savitzky-Golay":
+                                window_size = st.slider(
+                                    "Window Size:",
+                                    min_value=5,
+                                    max_value=51,
+                                    value=11,
+                                    step=2,
+                                    key="savgol_window",
+                                    help="Must be odd. Larger = more smoothing"
+                                )
+                            elif smooth_method == "Moving Average":
+                                window_size = st.slider(
+                                    "Window Size:",
+                                    min_value=3,
+                                    max_value=51,
+                                    value=9,
+                                    step=2,
+                                    key="ma_window",
+                                    help="Must be odd. Larger = more smoothing"
+                                )
+                            else:
+                                window_size = None
+
+                        with smooth_col3:
+                            if smooth_method == "Savitzky-Golay":
+                                poly_order = st.slider(
+                                    "Polynomial Order:",
+                                    min_value=1,
+                                    max_value=5,
+                                    value=3,
+                                    key="poly_order",
+                                    help="Higher = captures more detail but less smoothing"
+                                )
+                            elif smooth_method == "Gaussian":
+                                sigma = st.slider(
+                                    "Sigma (σ):",
+                                    min_value=0.5,
+                                    max_value=10.0,
+                                    value=2.0,
+                                    step=0.5,
+                                    key="gauss_sigma",
+                                    help="Standard deviation. Larger = more smoothing"
+                                )
+                            else:
+                                poly_order = None
+                                sigma = None
 
                     st.markdown("---")
 
@@ -336,34 +474,83 @@ def create_static_mode_interface():
 
                     if plot_data_type == "Raw Values":
                         y_key = 'raw_value'
-                        y_label = f"{selected_data_to_plot[0]['column']} [number]"
+                        y_label = f"{selected_data_to_plot[0]['column']} [counts]"
                         title_text = f"Depth Profiles: {selected_data_to_plot[0]['column']} vs DEPTH"
                     elif plot_data_type == "Atomic Fractions":
                         y_key = 'atomic_fraction'
-                        y_label = "Atomic Fraction"
+                        y_label = "Atomic Fraction (at depth)"
                         title_text = "Depth Profiles: Atomic Fractions vs DEPTH"
+                    elif plot_data_type == "Normalized Probability":
+                        y_key = 'probability'
+                        y_label = "Probability (normalized)"
+                        title_text = "Depth Profiles: Normalized Probability Distribution"
+                    elif plot_data_type == "Density (ions/Å)":
+                        y_key = 'density_per_angstrom'
+                        y_label = "Density (ions/Å per implanted ion)"
+                        title_text = "Depth Profiles: Ion Density vs DEPTH"
                     else:
                         y_key = 'concentration'
-                        y_label = "Concentration (atoms/cm³)"
-                        title_text = f"Depth Profiles: Concentrations vs DEPTH (ρ={target_density:.4f} atoms/Ų)"
+                        y_label = "Concentration (ions/cm³)"
+                        title_text = f"Depth Profiles: Concentration vs DEPTH (Fluence = {fluence:.2e} ions/cm²)"
+
+                    method_map = {
+                        "Savitzky-Golay": "savgol",
+                        "Moving Average": "moving_average",
+                        "Gaussian": "gaussian"
+                    }
 
                     for idx, data_item in enumerate(selected_data_to_plot):
-                        depths = [point['depth'] for point in data_item['data']]
-                        y_values = [point[y_key] for point in data_item['data']]
+                        depths = np.array([point['depth'] for point in data_item['data']])
+                        y_values = np.array([point[y_key] for point in data_item['data']])
 
                         if x_unit == "Nanometers (nm)":
-                            depths = [d / 10.0 for d in depths]
+                            depths = depths / 10.0
 
                         color = colors[idx % len(colors)]
 
-                        fig.add_trace(go.Scatter(
-                            x=depths,
-                            y=y_values,
-                            mode=plot_mode_value,
-                            name=data_item['label'],
-                            line=dict(color=color, width=3),
-                            marker=dict(size=6, color=color)
-                        ))
+                        if enable_smoothing:
+                            method_key = method_map[smooth_method]
+
+                            if method_key == "savgol":
+                                y_smoothed = smooth_data(depths, y_values, method='savgol',
+                                                         window=window_size, poly_order=poly_order)
+                            elif method_key == "moving_average":
+                                y_smoothed = smooth_data(depths, y_values, method='moving_average',
+                                                         window=window_size)
+                            elif method_key == "gaussian":
+                                y_smoothed = smooth_data(depths, y_values, method='gaussian',
+                                                         sigma=sigma)
+
+                            fig.add_trace(go.Scatter(
+                                x=depths,
+                                y=y_values,
+                                mode='lines',
+                                name=f"{data_item['label']} (original)",
+                                line=dict(color=color, width=1, dash='dot'),
+                                opacity=0.3,
+                                showlegend=True,
+                                legendgroup=f"group{idx}",
+                            ))
+
+                            fig.add_trace(go.Scatter(
+                                x=depths,
+                                y=y_smoothed,
+                                mode=plot_mode_value,
+                                name=f"{data_item['label']} (smoothed)",
+                                line=dict(color=color, width=3),
+                                marker=dict(size=6, color=color),
+                                showlegend=True,
+                                legendgroup=f"group{idx}",
+                            ))
+                        else:
+                            fig.add_trace(go.Scatter(
+                                x=depths,
+                                y=y_values,
+                                mode=plot_mode_value,
+                                name=data_item['label'],
+                                line=dict(color=color, width=3),
+                                marker=dict(size=6, color=color)
+                            ))
 
                     x_label = "Depth (nm)" if x_unit == "Nanometers (nm)" else "Depth (Å)"
 
@@ -375,12 +562,12 @@ def create_static_mode_interface():
                         height=650,
                         hovermode='x unified',
                         font=dict(size=20, color='black'),
-                        legend=dict(font=dict(size=18, color='black')),
+                        legend=dict(font=dict(size=16, color='black')),
                         xaxis=dict(tickfont=dict(size=20, color='black')),
                         yaxis=dict(tickfont=dict(size=20, color='black'))
                     )
 
-                    st.plotly_chart(fig, width='stretch')
+                    st.plotly_chart(fig)
 
                     if st.checkbox("Show Data Table", key="static_show_table"):
                         st.subheader("Selected Data")
@@ -399,21 +586,27 @@ def create_static_mode_interface():
 
                                 if plot_data_type == "Raw Values":
                                     df_display = df_display[[depth_col, 'raw_value']]
-                                    df_display.columns = [depth_label, data_item['column']]
+                                    df_display.columns = [depth_label, f'{data_item["column"]} (counts)']
                                 elif plot_data_type == "Atomic Fractions":
                                     df_display = df_display[[depth_col, 'atomic_fraction']]
                                     df_display.columns = [depth_label, 'Atomic Fraction']
+                                elif plot_data_type == "Normalized Probability":
+                                    df_display = df_display[[depth_col, 'probability']]
+                                    df_display.columns = [depth_label, 'Probability']
+                                elif plot_data_type == "Density (ions/Å)":
+                                    df_display = df_display[[depth_col, 'density_per_angstrom']]
+                                    df_display.columns = [depth_label, 'Density (ions/Å)']
                                 else:
                                     df_display = df_display[[depth_col, 'concentration']]
-                                    df_display.columns = [depth_label, 'Concentration (atoms/cm³)']
+                                    df_display.columns = [depth_label, 'Concentration (ions/cm³)']
 
-                                st.dataframe(df_display, width='stretch')
+                                st.dataframe(df_display)
 
                                 csv = df_display.to_csv(index=False)
                                 st.download_button(
                                     label=f"Download {data_item['label']} as CSV",
                                     data=csv,
-                                    file_name=f"{data_item['filename']}_{data_item['element']}_{data_item['column']}.csv",
+                                    file_name=f"{data_item['filename']}_{data_item['element']}_{data_item['column']}_{plot_data_type.replace(' ', '_')}.csv",
                                     mime="text/csv",
                                     key=f"download_{data_item['filename']}_{data_item['element']}_{idx}"
                                 )
