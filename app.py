@@ -6,6 +6,8 @@ from plotly.subplots import make_subplots
 import re
 import numpy as np
 
+from density import density_calculator_interface
+
 
 def parse_experimental_data(file_content, filename):
     """Parse experimental data from various delimited formats"""
@@ -778,6 +780,7 @@ def parse_sdtrimsp_file(file_content):
 def main():
     st.set_page_config(page_title="SDTrimSP Plotter", layout="wide")
 
+
     st.title("📊 SDTrimSP Data Plotter")
     st.markdown("Upload your SDTrimSP output file to visualize concentration profiles and density distributions")
     css = '''
@@ -832,6 +835,11 @@ def main():
 
     if uploaded_file is None:
 
+        st.sidebar.markdown("---")
+        st.sidebar.subheader("🧮 Atomic Density Calculator")
+
+        if st.sidebar.checkbox("Open Density Calculator"):
+            density_calculator_interface()
         st.sidebar.markdown("---")
         st.sidebar.subheader("🔄 POSCAR/CIF to crystal.inp")
         convert_crystal = st.sidebar.checkbox("Convert POSCAR/CIF to crystal.inp")
