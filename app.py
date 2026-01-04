@@ -1406,7 +1406,20 @@ def main():
 
                 with col2:
                     st.metric("Current Fluence", f"{selected_fluence:.2e}")
-                    st.metric("Max N Concentration", f"{df['N_total_conc'].max():.2e} atoms/cm³")
+
+                    if 'N_total_conc' in df.columns:
+                        n_conc_max = df['N_total_conc'].max()
+                    elif 'N_conc' in df.columns:
+                        n_conc_max = df['N_conc'].max()
+                    elif 'N1_conc' in df.columns:
+                        n_conc_max = df['N1_conc'].max()
+                    else:
+                        n_conc_max = None
+
+                    if n_conc_max is not None:
+                        st.metric("Max N Concentration", f"{n_conc_max:.2e} atoms/cm³")
+                    else:
+                        st.metric("Max N Concentration", "N/A")
 
                 with col3:
                     st.metric("Available Fluence Steps", len(fluence_values))
