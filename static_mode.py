@@ -8,7 +8,6 @@ import re
 
 
 def parse_experimental_data(file_content, filename):
-    """Parse experimental data from various delimited formats"""
     lines = file_content.strip().split('\n')
 
     first_data_line = None
@@ -215,6 +214,12 @@ def calculate_processed_data_static(elements_data, column_name, fluence_per_cm2=
             depth = point['depth']
             depth_data[depth][element] = point[column_name]
 
+    if len(all_depths) > 1:
+        spacings = [all_depths[i + 1] - all_depths[i] for i in range(len(all_depths) - 1)]
+        bin_width_angstrom = sum(spacings) / len(spacings)
+    else:
+        bin_width_angstrom = 1.0
+
     processed_data = {}
 
     for element in elements_data.keys():
@@ -239,7 +244,6 @@ def calculate_processed_data_static(elements_data, column_name, fluence_per_cm2=
             density_per_angstrom = value / element_total if element_total > 0 else 0
 
             if fluence_per_cm2 is not None and element_total > 0:
-                bin_width_angstrom = 1.0
                 bin_width_cm = bin_width_angstrom * 1e-8
                 concentration = (value / element_total) * (fluence_per_cm2 / bin_width_cm)
             else:
@@ -369,6 +373,14 @@ def create_static_mode_interface():
                         'filename': uploaded_file.name,
                         'elements_data': elements_data
                     })
+
+                    sample_element = list(elements_data.keys())[0]
+                    if len(elements_data[sample_element]['data']) > 1:
+                        depths = [p['depth'] for p in elements_data[sample_element]['data']]
+                        depths.sort()
+                        spacings = [depths[i + 1] - depths[i] for i in range(len(depths) - 1)]
+                        avg_spacing = sum(spacings) / len(spacings)
+                        st.sidebar.info(f"📏 Detected bin width: {avg_spacing:.2f} Å")
                 else:
                     st.error(f"❌ {uploaded_file.name}: No valid data found")
 
@@ -546,6 +558,67 @@ def create_static_mode_interface():
 
                 st.markdown("---")
 
+                st.markdown("#### 🎨 Simulation Data Styling")
+                col_sim1, col_sim2 = st.columns(2)
+                with col_sim1:
+                    sim_line_width = st.slider(
+                        "Simulation Line Width:",
+                        min_value=1,
+                        max_value=10,
+                        value=3,
+                        step=1,
+                        key="sim_line_width"
+                    )
+
+                with col_sim2:
+                    sim_marker_size = st.slider(
+                        "Simulation Marker Size:",
+                        min_value=3,
+                        max_value=15,
+                        value=6,
+                        step=1,
+                        key="sim_marker_size"
+                    )
+
+                st.markdown("---")
+
+                if experimental_data:
+                    st.markdown("#### 🎨 Experimental Data Styling")
+
+                    exp_plot_mode = st.selectbox(
+                        "Experimental Plot Style:",
+                        ["Markers", "Lines", "Lines+Markers"],
+                        index=0,
+                        key="exp_plot_mode"
+                    )
+
+                    col_exp1, col_exp2 = st.columns(2)
+                    with col_exp1:
+                        exp_marker_size = st.slider(
+                            "Marker Size:",
+                            min_value=4,
+                            max_value=20,
+                            value=8,
+                            step=1,
+                            key="exp_marker_size"
+                        )
+
+                    with col_exp2:
+                        exp_line_width = st.slider(
+                            "Line Width:",
+                            min_value=1,
+                            max_value=10,
+                            value=3,
+                            step=1,
+                            key="exp_line_width"
+                        )
+
+                    st.markdown("---")
+                else:
+                    exp_plot_mode = "Markers"
+                    exp_marker_size = 8
+                    exp_line_width = 3
+
                 fig = go.Figure()
 
                 colors = ['blue', 'red', 'green', 'orange', 'purple', 'brown', 'pink', 'cyan', 'magenta', 'lime']
@@ -627,8 +700,8 @@ def create_static_mode_interface():
                             y=y_smoothed,
                             mode=plot_mode_value,
                             name=f"{data_item['label']} (smoothed)",
-                            line=dict(color=color, width=3),
-                            marker=dict(size=6, color=color),
+                            line=dict(color=color, width=sim_line_width),
+                            marker=dict(size=sim_marker_size, color=color),
                             showlegend=True,
                             legendgroup=f"group{idx}",
                         ))
@@ -638,8 +711,8 @@ def create_static_mode_interface():
                             y=y_values,
                             mode=plot_mode_value,
                             name=data_item['label'],
-                            line=dict(color=color, width=3),
-                            marker=dict(size=6, color=color)
+                            line=dict(color=color, width=sim_line_width),
+                            marker=dict(size=sim_marker_size, color=color)
                         ))
 
                 if experimental_data:
@@ -651,12 +724,20 @@ def create_static_mode_interface():
                         if x_unit == "Nanometers (nm)":
                             exp_x = exp_x / 10.0
 
+                        exp_mode_map = {
+                            "Markers": "markers",
+                            "Lines": "lines",
+                            "Lines+Markers": "lines+markers"
+                        }
+                        exp_plot_mode_value = exp_mode_map.get(exp_plot_mode, "markers")
+
                         fig.add_trace(go.Scatter(
                             x=exp_x,
                             y=exp_y,
-                            mode='markers',
+                            mode=exp_plot_mode_value,
                             name=f"Exp: {exp_name}",
-                            marker=dict(size=8, color=exp_colors[i % len(exp_colors)], symbol='diamond'),
+                            marker=dict(size=exp_marker_size, color=exp_colors[i % len(exp_colors)], symbol='diamond'),
+                            line=dict(width=exp_line_width, color=exp_colors[i % len(exp_colors)]),
                             showlegend=True
                         ))
 
