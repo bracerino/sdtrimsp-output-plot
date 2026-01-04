@@ -175,7 +175,7 @@ def create_single_fluence_plots(df, depth_col, depth_label, plot_type, mode, y_a
                 ))
 
         fig.update_layout(
-            title=dict(text=f"Concentrations vs Depth (Fluence: {selected_fluence:.1f})",
+            title=dict(text=f"Concentrations vs Depth (Fluence: {selected_fluence:.1f} atoms/A² = {selected_fluence:.1f} ×10¹⁶ atoms/cm²)",
                        font=dict(size=28, color='black')),
             xaxis_title=dict(text=depth_label, font=dict(size=24, color='black')),
             yaxis_title=dict(text="Concentration (atoms/cm³)", font=dict(size=24, color='black')),
@@ -906,60 +906,50 @@ def main():
                             line_idx += 1
 
                     elif file_type == "cif":
-                        a = b = c = 1.0
-                        alpha = beta = gamma = 90.0
-                        elements = []
-                        positions = []
+                        try:
+                            from pymatgen.io.cif import CifParser
+                            from pymatgen.io.vasp import Poscar
+                            from io import StringIO
 
-                        for line in lines:
-                            if '_cell_length_a' in line:
-                                a = float(line.split()[1].split('(')[0])
-                            elif '_cell_length_b' in line:
-                                b = float(line.split()[1].split('(')[0])
-                            elif '_cell_length_c' in line:
-                                c = float(line.split()[1].split('(')[0])
-                            elif '_cell_angle_alpha' in line:
-                                alpha = float(line.split()[1].split('(')[0])
-                            elif '_cell_angle_beta' in line:
-                                beta = float(line.split()[1].split('(')[0])
-                            elif '_cell_angle_gamma' in line:
-                                gamma = float(line.split()[1].split('(')[0])
 
-                        in_atom_site = False
-                        for i, line in enumerate(lines):
-                            if '_atom_site_fract_x' in line or '_atom_site_type_symbol' in line:
-                                in_atom_site = True
-                                continue
-                            if in_atom_site and line.strip() and not line.startswith('_') and not line.startswith('#'):
-                                parts = line.split()
-                                if len(parts) >= 4:
-                                    elem = parts[0]
-                                    if elem not in elements:
-                                        elements.append(elem)
-                                    elem_idx = elements.index(elem) + 1
-                                    x = float(parts[1].split('(')[0])
-                                    y = float(parts[2].split('(')[0])
-                                    z = float(parts[3].split('(')[0])
-                                    positions.append([x, y, z, elem_idx])
+                            parser = CifParser(StringIO(file_content))
+                            structure = parser.get_structures(primitive=False)[0]
+                            poscar_string = str(Poscar(structure))
 
-                        alpha_rad = np.radians(alpha)
-                        beta_rad = np.radians(beta)
-                        gamma_rad = np.radians(gamma)
 
-                        cos_alpha = np.cos(alpha_rad)
-                        cos_beta = np.cos(beta_rad)
-                        cos_gamma = np.cos(gamma_rad)
-                        sin_gamma = np.sin(gamma_rad)
+                            poscar_lines = poscar_string.strip().split('\n')
 
-                        v1 = [a, 0, 0]
-                        v2 = [b * cos_gamma, b * sin_gamma, 0]
-                        v3 = [
-                            c * cos_beta,
-                            c * (cos_alpha - cos_beta * cos_gamma) / sin_gamma,
-                            c * np.sqrt(1 - cos_beta ** 2 - ((cos_alpha - cos_beta * cos_gamma) / sin_gamma) ** 2)
-                        ]
+                            crystal_name = crystal_file.name.replace('.cif', '').replace('.txt', '')
+                            scale = float(poscar_lines[1].strip())
 
-                        crystal_name = crystal_file.name.replace('.cif', '').replace('.txt', '')
+                            v1 = [float(x) * scale for x in poscar_lines[2].split()]
+                            v2 = [float(x) * scale for x in poscar_lines[3].split()]
+                            v3 = [float(x) * scale for x in poscar_lines[4].split()]
+
+                            elements = poscar_lines[5].split()
+                            counts = [int(x) for x in poscar_lines[6].split()]
+
+
+                            positions = []
+                            atom_line_start = 8
+                            atom_idx = 0
+
+                            for elem_idx, (elem, count) in enumerate(zip(elements, counts)):
+                                for i in range(count):
+                                    pos_line = poscar_lines[atom_line_start + atom_idx].split()
+                                    x, y, z = float(pos_line[0]), float(pos_line[1]), float(pos_line[2])
+                                    positions.append([x, y, z, elem_idx + 1])
+                                    atom_idx += 1
+
+                        except ImportError:
+                            st.error("❌ pymatgen is required for CIF file conversion.")
+                            st.code("pip install pymatgen")
+                            st.stop()
+                        except Exception as e:
+                            st.error(f"❌ Error converting CIF file: {str(e)}")
+                            import traceback
+                            st.code(traceback.format_exc())
+                            st.stop()
 
                     else:
                         crystal_name = lines[0].strip()
