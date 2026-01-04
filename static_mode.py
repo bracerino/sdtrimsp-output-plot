@@ -4,6 +4,71 @@ import plotly.graph_objects as go
 import numpy as np
 from scipy.signal import savgol_filter
 from scipy.ndimage import gaussian_filter1d
+import re
+
+
+def parse_experimental_data(file_content, filename):
+    """Parse experimental data from various delimited formats"""
+    lines = file_content.strip().split('\n')
+
+    first_data_line = None
+    for line in lines[:10]:
+        line = line.strip()
+        if line and not line.startswith('#') and not line.startswith('//'):
+            if re.search(r'\d', line):
+                first_data_line = line
+                break
+
+    if not first_data_line:
+        return None, "No data lines found"
+
+    delimiters = [',', ';', '\t', ' ']
+    best_delimiter = ' '
+    max_parts = 0
+
+    for delimiter in delimiters:
+        if delimiter == ' ':
+            parts = first_data_line.split()
+        else:
+            parts = first_data_line.split(delimiter)
+
+        numeric_parts = []
+        for part in parts:
+            try:
+                float(part.strip())
+                numeric_parts.append(part.strip())
+            except ValueError:
+                pass
+
+        if len(numeric_parts) == 2:
+            best_delimiter = delimiter
+            break
+        elif len(numeric_parts) > max_parts:
+            max_parts = len(numeric_parts)
+            best_delimiter = delimiter
+
+    data_points = []
+    for line in lines:
+        line = line.strip()
+        if line and not line.startswith('#') and not line.startswith('//'):
+            if best_delimiter == ' ':
+                parts = line.split()
+            else:
+                parts = line.split(best_delimiter)
+
+            if len(parts) >= 2:
+                try:
+                    x_val = float(parts[0].strip())
+                    y_val = float(parts[1].strip())
+                    data_points.append([x_val, y_val])
+                except ValueError:
+                    continue
+
+    if not data_points:
+        return None, "No valid data points found"
+
+    df = pd.DataFrame(data_points, columns=['x', 'y'])
+    return df, f"Successfully parsed {len(data_points)} points using delimiter '{best_delimiter}'"
 
 
 def parse_static_damage_file(file_content, filename):
@@ -271,9 +336,30 @@ def create_static_mode_interface():
             key="static_damage_files"
         )
 
-        if uploaded_static_files:
-            all_file_data = []
+        st.sidebar.markdown("---")
+        st.sidebar.subheader("📊 Experimental/Comparison Data")
 
+        uploaded_exp_files = st.sidebar.file_uploader(
+            "Upload experimental data (2-column format)",
+            type=['txt', 'csv', 'dat'],
+            accept_multiple_files=True,
+            key="static_exp_files",
+            help="Upload 2-column data files (depth, value) for comparison"
+        )
+
+        experimental_data = []
+        if uploaded_exp_files:
+            for exp_file in uploaded_exp_files:
+                exp_content = str(exp_file.read(), "utf-8")
+                exp_df, exp_info = parse_experimental_data(exp_content, exp_file.name)
+                if exp_df is not None:
+                    experimental_data.append((exp_file.name, exp_df, exp_info))
+                    st.sidebar.success(f"✅ {exp_file.name}: {exp_info}")
+                else:
+                    st.sidebar.error(f"❌ {exp_file.name}: {exp_info}")
+
+        all_file_data = []
+        if uploaded_static_files:
             for uploaded_file in uploaded_static_files:
                 file_content = str(uploaded_file.read(), "utf-8")
                 elements_data = parse_static_damage_file(file_content, uploaded_file.name)
@@ -283,47 +369,44 @@ def create_static_mode_interface():
                         'filename': uploaded_file.name,
                         'elements_data': elements_data
                     })
-                   # st.success(f"✅ {uploaded_file.name}: Found elements: {', '.join(elements_data.keys())}")
                 else:
                     st.error(f"❌ {uploaded_file.name}: No valid data found")
 
-            if all_file_data:
-                #st.markdown("---")
-                #st.subheader("Plot Settings")
+        if all_file_data or experimental_data:
+            col_settings1, col_settings2 = st.columns(2)
 
-                col_settings1, col_settings2 = st.columns(2)
+            with col_settings1:
+                plot_data_type = st.sidebar.radio(
+                    "Data Type to Plot:",
+                    ["Raw Values",
+                     "Atomic Fractions",
+                     "Normalized Probability",
+                     "Density (ions/Å)",
+                     "Concentration (ions/cm³)"],
+                    index=2,
+                    key="static_data_type",
+                    help="Normalized Probability is recommended for comparing distributions"
+                )
 
-                with col_settings1:
-                    plot_data_type = st.sidebar.radio(
-                        "Data Type to Plot:",
-                        ["Raw Values",
-                         "Atomic Fractions",
-                         "Normalized Probability",
-                         "Density (ions/Å)",
-                         "Concentration (ions/cm³)"],
-                        index=2,
-                        key="static_data_type",
-                        help="Normalized Probability is recommended for comparing distributions"
+            with col_settings2:
+                if plot_data_type == "Concentration (ions/cm³)":
+                    fluence = st.sidebar.number_input(
+                        "Fluence (ions/cm²):",
+                        min_value=1e10,
+                        max_value=1e18,
+                        value=1e15,
+                        format="%.2e",
+                        help="Total number of ions implanted per cm²",
+                        key="static_fluence"
                     )
+                    st.sidebar.caption(f"= {fluence:.2e} ions/cm²")
+                else:
+                    fluence = None
 
-                with col_settings2:
-                    if plot_data_type == "Concentration (ions/cm³)":
-                        fluence = st.sidebar.number_input(
-                            "Fluence (ions/cm²):",
-                            min_value=1e10,
-                            max_value=1e18,
-                            value=1e15,
-                            format="%.2e",
-                            help="Total number of ions implanted per cm²",
-                            key="static_fluence"
-                        )
-                        st.sidebar.caption(f"= {fluence:.2e} ions/cm²")
-                    else:
-                        fluence = None
+            selected_data_to_plot = []
 
+            if all_file_data:
                 st.subheader("Select Elements and Columns to Plot")
-
-                selected_data_to_plot = []
 
                 tab_names = [f"📄 {file_data['filename']}" for file_data in all_file_data]
                 tabs = st.tabs(tab_names)
@@ -377,101 +460,104 @@ def create_static_mode_interface():
                                 'data': data_to_use,
                                 'label': label
                             })
+            elif experimental_data:
+                st.info("📊 Experimental data loaded. Configure plot settings below to visualize.")
 
-                if selected_data_to_plot:
-                    st.markdown("---")
-                    st.subheader("Plot Controls")
+            if selected_data_to_plot or experimental_data:
+                st.markdown("---")
+                st.subheader("Plot Controls")
 
-                    col1, col2, col3, col4 = st.columns(4)
+                col1, col2, col3, col4 = st.columns(4)
 
-                    with col1:
-                        plot_mode = st.radio("Plot Mode:", ["Lines", "Markers", "Lines+Markers"],
-                                             key="static_plot_mode")
+                with col1:
+                    plot_mode = st.radio("Plot Mode:", ["Lines", "Markers", "Lines+Markers"],
+                                         key="static_plot_mode")
 
-                    with col2:
-                        y_scale = st.radio("Y-axis Scale:", ["Linear", "Logarithmic"], key="static_y_scale")
+                with col2:
+                    y_scale = st.radio("Y-axis Scale:", ["Linear", "Logarithmic"], key="static_y_scale")
 
-                    with col3:
-                        x_unit = st.radio("Depth Unit:", ["Angstroms (Å)", "Nanometers (nm)"], key="static_x_unit")
+                with col3:
+                    x_unit = st.radio("Depth Unit:", ["Angstroms (Å)", "Nanometers (nm)"], key="static_x_unit")
 
-                    with col4:
-                        enable_smoothing = st.checkbox("Enable Smoothing", value=False, key="enable_smooth")
+                with col4:
+                    enable_smoothing = st.checkbox("Enable Smoothing", value=False, key="enable_smooth")
 
-                    if enable_smoothing:
-                        st.markdown("#### Smoothing Settings")
+                if enable_smoothing:
+                    st.markdown("#### Smoothing Settings")
 
-                        smooth_col1, smooth_col2, smooth_col3 = st.columns(3)
+                    smooth_col1, smooth_col2, smooth_col3 = st.columns(3)
 
-                        with smooth_col1:
-                            smooth_method = st.selectbox(
-                                "Smoothing Method:",
-                                ["Savitzky-Golay", "Moving Average", "Gaussian"],
-                                index=0,
-                                key="smooth_method",
-                                help="Savitzky-Golay: Best for preserving peak shapes | Moving Average: Simple smoothing | Gaussian: Smooth but can broaden peaks"
+                    with smooth_col1:
+                        smooth_method = st.selectbox(
+                            "Smoothing Method:",
+                            ["Savitzky-Golay", "Moving Average", "Gaussian"],
+                            index=0,
+                            key="smooth_method",
+                            help="Savitzky-Golay: Best for preserving peak shapes | Moving Average: Simple smoothing | Gaussian: Smooth but can broaden peaks"
+                        )
+
+                    with smooth_col2:
+                        if smooth_method == "Savitzky-Golay":
+                            window_size = st.slider(
+                                "Window Size:",
+                                min_value=5,
+                                max_value=51,
+                                value=11,
+                                step=2,
+                                key="savgol_window",
+                                help="Must be odd. Larger = more smoothing"
                             )
+                        elif smooth_method == "Moving Average":
+                            window_size = st.slider(
+                                "Window Size:",
+                                min_value=3,
+                                max_value=51,
+                                value=9,
+                                step=2,
+                                key="ma_window",
+                                help="Must be odd. Larger = more smoothing"
+                            )
+                        else:
+                            window_size = None
 
-                        with smooth_col2:
-                            if smooth_method == "Savitzky-Golay":
-                                window_size = st.slider(
-                                    "Window Size:",
-                                    min_value=5,
-                                    max_value=51,
-                                    value=11,
-                                    step=2,
-                                    key="savgol_window",
-                                    help="Must be odd. Larger = more smoothing"
-                                )
-                            elif smooth_method == "Moving Average":
-                                window_size = st.slider(
-                                    "Window Size:",
-                                    min_value=3,
-                                    max_value=51,
-                                    value=9,
-                                    step=2,
-                                    key="ma_window",
-                                    help="Must be odd. Larger = more smoothing"
-                                )
-                            else:
-                                window_size = None
+                    with smooth_col3:
+                        if smooth_method == "Savitzky-Golay":
+                            poly_order = st.slider(
+                                "Polynomial Order:",
+                                min_value=1,
+                                max_value=5,
+                                value=3,
+                                key="poly_order",
+                                help="Higher = captures more detail but less smoothing"
+                            )
+                        elif smooth_method == "Gaussian":
+                            sigma = st.slider(
+                                "Sigma (σ):",
+                                min_value=0.5,
+                                max_value=10.0,
+                                value=2.0,
+                                step=0.5,
+                                key="gauss_sigma",
+                                help="Standard deviation. Larger = more smoothing"
+                            )
+                        else:
+                            poly_order = None
+                            sigma = None
 
-                        with smooth_col3:
-                            if smooth_method == "Savitzky-Golay":
-                                poly_order = st.slider(
-                                    "Polynomial Order:",
-                                    min_value=1,
-                                    max_value=5,
-                                    value=3,
-                                    key="poly_order",
-                                    help="Higher = captures more detail but less smoothing"
-                                )
-                            elif smooth_method == "Gaussian":
-                                sigma = st.slider(
-                                    "Sigma (σ):",
-                                    min_value=0.5,
-                                    max_value=10.0,
-                                    value=2.0,
-                                    step=0.5,
-                                    key="gauss_sigma",
-                                    help="Standard deviation. Larger = more smoothing"
-                                )
-                            else:
-                                poly_order = None
-                                sigma = None
+                st.markdown("---")
 
-                    st.markdown("---")
+                fig = go.Figure()
 
-                    fig = go.Figure()
+                colors = ['blue', 'red', 'green', 'orange', 'purple', 'brown', 'pink', 'cyan', 'magenta', 'lime']
 
-                    colors = ['blue', 'red', 'green', 'orange', 'purple', 'brown', 'pink', 'cyan', 'magenta', 'lime']
+                mode_map = {
+                    "Lines": "lines",
+                    "Markers": "markers",
+                    "Lines+Markers": "lines+markers"
+                }
+                plot_mode_value = mode_map[plot_mode]
 
-                    mode_map = {
-                        "Lines": "lines",
-                        "Markers": "markers",
-                        "Lines+Markers": "lines+markers"
-                    }
-                    plot_mode_value = mode_map[plot_mode]
-
+                if selected_data_to_plot and len(selected_data_to_plot) > 0:
                     if plot_data_type == "Raw Values":
                         y_key = 'raw_value'
                         y_label = f"{selected_data_to_plot[0]['column']} [counts]"
@@ -492,86 +578,109 @@ def create_static_mode_interface():
                         y_key = 'concentration'
                         y_label = "Concentration (ions/cm³)"
                         title_text = f"Depth Profiles: Concentration vs DEPTH (Fluence = {fluence:.2e} ions/cm²)"
+                else:
+                    y_key = None
+                    y_label = "Intensity / Probability"
+                    title_text = "Depth Profiles: Experimental Data"
 
-                    method_map = {
-                        "Savitzky-Golay": "savgol",
-                        "Moving Average": "moving_average",
-                        "Gaussian": "gaussian"
-                    }
+                method_map = {
+                    "Savitzky-Golay": "savgol",
+                    "Moving Average": "moving_average",
+                    "Gaussian": "gaussian"
+                }
 
-                    for idx, data_item in enumerate(selected_data_to_plot):
-                        depths = np.array([point['depth'] for point in data_item['data']])
-                        y_values = np.array([point[y_key] for point in data_item['data']])
+                for idx, data_item in enumerate(selected_data_to_plot):
+                    depths = np.array([point['depth'] for point in data_item['data']])
+                    y_values = np.array([point[y_key] for point in data_item['data']])
+
+                    if x_unit == "Nanometers (nm)":
+                        depths = depths / 10.0
+
+                    color = colors[idx % len(colors)]
+
+                    if enable_smoothing:
+                        method_key = method_map[smooth_method]
+
+                        if method_key == "savgol":
+                            y_smoothed = smooth_data(depths, y_values, method='savgol',
+                                                     window=window_size, poly_order=poly_order)
+                        elif method_key == "moving_average":
+                            y_smoothed = smooth_data(depths, y_values, method='moving_average',
+                                                     window=window_size)
+                        elif method_key == "gaussian":
+                            y_smoothed = smooth_data(depths, y_values, method='gaussian',
+                                                     sigma=sigma)
+
+                        fig.add_trace(go.Scatter(
+                            x=depths,
+                            y=y_values,
+                            mode='lines',
+                            name=f"{data_item['label']} (original)",
+                            line=dict(color=color, width=1, dash='dot'),
+                            opacity=0.3,
+                            showlegend=True,
+                            legendgroup=f"group{idx}",
+                        ))
+
+                        fig.add_trace(go.Scatter(
+                            x=depths,
+                            y=y_smoothed,
+                            mode=plot_mode_value,
+                            name=f"{data_item['label']} (smoothed)",
+                            line=dict(color=color, width=3),
+                            marker=dict(size=6, color=color),
+                            showlegend=True,
+                            legendgroup=f"group{idx}",
+                        ))
+                    else:
+                        fig.add_trace(go.Scatter(
+                            x=depths,
+                            y=y_values,
+                            mode=plot_mode_value,
+                            name=data_item['label'],
+                            line=dict(color=color, width=3),
+                            marker=dict(size=6, color=color)
+                        ))
+
+                if experimental_data:
+                    exp_colors = ['darkgreen', 'darkred', 'darkblue', 'darkorange', 'darkviolet']
+                    for i, (exp_name, exp_df, exp_info) in enumerate(experimental_data):
+                        exp_x = exp_df['x'].values
+                        exp_y = exp_df['y'].values
 
                         if x_unit == "Nanometers (nm)":
-                            depths = depths / 10.0
+                            exp_x = exp_x / 10.0
 
-                        color = colors[idx % len(colors)]
+                        fig.add_trace(go.Scatter(
+                            x=exp_x,
+                            y=exp_y,
+                            mode='markers',
+                            name=f"Exp: {exp_name}",
+                            marker=dict(size=8, color=exp_colors[i % len(exp_colors)], symbol='diamond'),
+                            showlegend=True
+                        ))
 
-                        if enable_smoothing:
-                            method_key = method_map[smooth_method]
+                x_label = "Depth (nm)" if x_unit == "Nanometers (nm)" else "Depth (Å)"
 
-                            if method_key == "savgol":
-                                y_smoothed = smooth_data(depths, y_values, method='savgol',
-                                                         window=window_size, poly_order=poly_order)
-                            elif method_key == "moving_average":
-                                y_smoothed = smooth_data(depths, y_values, method='moving_average',
-                                                         window=window_size)
-                            elif method_key == "gaussian":
-                                y_smoothed = smooth_data(depths, y_values, method='gaussian',
-                                                         sigma=sigma)
+                fig.update_layout(
+                    title=dict(text=title_text, font=dict(size=28, color='black')),
+                    xaxis_title=dict(text=x_label, font=dict(size=24, color='black')),
+                    yaxis_title=dict(text=y_label, font=dict(size=24, color='black')),
+                    yaxis_type="log" if y_scale == "Logarithmic" else "linear",
+                    height=650,
+                    hovermode='x unified',
+                    font=dict(size=20, color='black'),
+                    legend=dict(font=dict(size=16, color='black')),
+                    xaxis=dict(tickfont=dict(size=20, color='black')),
+                    yaxis=dict(tickfont=dict(size=20, color='black'))
+                )
 
-                            fig.add_trace(go.Scatter(
-                                x=depths,
-                                y=y_values,
-                                mode='lines',
-                                name=f"{data_item['label']} (original)",
-                                line=dict(color=color, width=1, dash='dot'),
-                                opacity=0.3,
-                                showlegend=True,
-                                legendgroup=f"group{idx}",
-                            ))
+                st.plotly_chart(fig, width='stretch')
 
-                            fig.add_trace(go.Scatter(
-                                x=depths,
-                                y=y_smoothed,
-                                mode=plot_mode_value,
-                                name=f"{data_item['label']} (smoothed)",
-                                line=dict(color=color, width=3),
-                                marker=dict(size=6, color=color),
-                                showlegend=True,
-                                legendgroup=f"group{idx}",
-                            ))
-                        else:
-                            fig.add_trace(go.Scatter(
-                                x=depths,
-                                y=y_values,
-                                mode=plot_mode_value,
-                                name=data_item['label'],
-                                line=dict(color=color, width=3),
-                                marker=dict(size=6, color=color)
-                            ))
+                if st.checkbox("Show Data Table", key="static_show_table"):
+                    st.subheader("Selected Data")
 
-                    x_label = "Depth (nm)" if x_unit == "Nanometers (nm)" else "Depth (Å)"
-
-                    fig.update_layout(
-                        title=dict(text=title_text, font=dict(size=28, color='black')),
-                        xaxis_title=dict(text=x_label, font=dict(size=24, color='black')),
-                        yaxis_title=dict(text=y_label, font=dict(size=24, color='black')),
-                        yaxis_type="log" if y_scale == "Logarithmic" else "linear",
-                        height=650,
-                        hovermode='x unified',
-                        font=dict(size=20, color='black'),
-                        legend=dict(font=dict(size=16, color='black')),
-                        xaxis=dict(tickfont=dict(size=20, color='black')),
-                        yaxis=dict(tickfont=dict(size=20, color='black'))
-                    )
-
-                    st.plotly_chart(fig)
-
-                    if st.checkbox("Show Data Table", key="static_show_table"):
-                        st.subheader("Selected Data")
-
+                    if selected_data_to_plot:
                         for data_item in selected_data_to_plot:
                             with st.expander(f"📊 {data_item['label']}", expanded=False):
                                 df_display = pd.DataFrame(data_item['data'])
@@ -600,7 +709,7 @@ def create_static_mode_interface():
                                     df_display = df_display[[depth_col, 'concentration']]
                                     df_display.columns = [depth_label, 'Concentration (ions/cm³)']
 
-                                st.dataframe(df_display)
+                                st.dataframe(df_display, width='stretch')
 
                                 csv = df_display.to_csv(index=False)
                                 st.download_button(
@@ -610,8 +719,39 @@ def create_static_mode_interface():
                                     mime="text/csv",
                                     key=f"download_{data_item['filename']}_{data_item['element']}_{idx}"
                                 )
-                else:
+
+                    if experimental_data:
+                        if selected_data_to_plot:
+                            st.markdown("---")
+                        st.subheader("Experimental Data")
+                        for exp_name, exp_df, exp_info in experimental_data:
+                            with st.expander(f"📊 Exp: {exp_name}", expanded=False):
+                                display_df = exp_df.copy()
+
+                                if x_unit == "Nanometers (nm)":
+                                    display_df['x'] = display_df['x'] / 10.0
+                                    x_label_display = 'Depth (nm)'
+                                else:
+                                    x_label_display = 'Depth (Å)'
+
+                                display_df.columns = [x_label_display, 'Value']
+                                st.dataframe(display_df, width='stretch')
+
+                                csv = display_df.to_csv(index=False)
+                                st.download_button(
+                                    label=f"Download {exp_name} as CSV",
+                                    data=csv,
+                                    file_name=f"exp_{exp_name}",
+                                    mime="text/csv",
+                                    key=f"download_exp_{exp_name}"
+                                )
+            else:
+                if all_file_data and not experimental_data:
                     st.info("👆 Select elements and columns from the files above to plot")
+                elif not all_file_data and not experimental_data:
+                    st.info("👆 Upload simulation files or experimental data to start plotting")
+        else:
+            st.info("👆 Upload simulation files and/or experimental data in the sidebar to begin")
 
         return True
 
