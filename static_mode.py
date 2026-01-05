@@ -830,9 +830,9 @@ def create_static_mode_interface():
                 if all_file_data and not experimental_data:
                     st.info("👆 Select elements and columns from the files above to plot")
                 elif not all_file_data and not experimental_data:
-                    st.info("👆 Upload simulation files or experimental data to start plotting")
+                    st.info("👈 Upload simulation files or experimental data to start plotting")
         else:
-            st.info("👆 Upload simulation files and/or experimental data in the sidebar to begin")
+            st.info("👈 Upload simulation files and/or experimental data in the sidebar to begin")
 
         return True
 
