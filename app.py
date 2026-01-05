@@ -120,8 +120,9 @@ def create_single_fluence_plots(df, depth_col, depth_label, plot_type, mode, y_a
                 ))
 
         fig.update_layout(
-            title=dict(text=f"Atomic Fractions vs Depth (Fluence: {selected_fluence:.1f} atoms/A² = {selected_fluence:.1f} ×10¹⁶ atoms/cm²)",
-                       font=dict(size=28, color='black')),
+            title=dict(
+                text=f"Atomic Fractions vs Depth (Fluence: {selected_fluence:.1f} atoms/A² = {selected_fluence:.1f} ×10¹⁶ atoms/cm²)",
+                font=dict(size=28, color='black')),
             xaxis_title=dict(text=depth_label, font=dict(size=24, color='black')),
             yaxis_title=dict(text="Atomic Fraction", font=dict(size=24, color='black')),
             yaxis_type="log" if y_axis_scale == "Logarithmic" else "linear",
@@ -175,10 +176,67 @@ def create_single_fluence_plots(df, depth_col, depth_label, plot_type, mode, y_a
                 ))
 
         fig.update_layout(
-            title=dict(text=f"Concentrations vs Depth (Fluence: {selected_fluence:.1f} atoms/A² = {selected_fluence:.1f} ×10¹⁶ atoms/cm²)",
-                       font=dict(size=28, color='black')),
+            title=dict(
+                text=f"Concentrations vs Depth (Fluence: {selected_fluence:.1f} atoms/A² = {selected_fluence:.1f} ×10¹⁶ atoms/cm²)",
+                font=dict(size=28, color='black')),
             xaxis_title=dict(text=depth_label, font=dict(size=24, color='black')),
             yaxis_title=dict(text="Concentration (atoms/cm³)", font=dict(size=24, color='black')),
+            yaxis_type="log" if y_axis_scale == "Logarithmic" else "linear",
+            height=650,
+            hovermode='x unified',
+            font=dict(size=20, color='black'),
+            legend=dict(font=dict(size=20, color='black')),
+            xaxis=dict(tickfont=dict(size=20, color='black')),
+            yaxis=dict(tickfont=dict(size=20, color='black'))
+        )
+
+    elif plot_type == "Density (ions/Å)":
+        fig = go.Figure()
+        colors = ['blue', 'red', 'green', 'orange', 'purple', 'brown', 'pink']
+
+        for i, element in enumerate(element_names):
+            dens_col = f'{element}_dens_smooth' if smooth_data and f'{element}_dens_smooth' in df.columns else f'{element}_dens'
+            if dens_col in df.columns:
+                display_name = f"{element} (smoothed)" if smooth_data and f'{element}_dens_smooth' in df.columns else element
+                fig.add_trace(go.Scatter(
+                    x=df[depth_col], y=df[dens_col],
+                    mode=mode, name=display_name,
+                    line=dict(color=colors[i % len(colors)], width=3),
+                    marker=dict(size=6, color=colors[i % len(colors)])
+                ))
+
+        if selected_elements and len(selected_elements) > 1:
+            if smooth_data and all(f'{elem}_dens_smooth' in df.columns for elem in selected_elements):
+                combined_dens = df[[f'{elem}_dens_smooth' for elem in selected_elements]].sum(axis=1)
+                combined_name = f'Combined ({"+".join(selected_elements)}) (smoothed)'
+            else:
+                combined_dens = df[[f'{elem}_dens' for elem in selected_elements if f'{elem}_dens' in df.columns]].sum(
+                    axis=1)
+                combined_name = f'Combined ({"+".join(selected_elements)})'
+
+            fig.add_trace(go.Scatter(
+                x=df[depth_col], y=combined_dens,
+                mode=mode, name=combined_name,
+                line=dict(color='black', width=3, dash='dash'),
+                marker=dict(size=6, color='black')
+            ))
+
+        if experimental_data:
+            exp_colors = ['darkgreen', 'darkred', 'darkblue', 'darkorange', 'darkviolet']
+            for i, (exp_name, exp_df, exp_info) in enumerate(experimental_data):
+                fig.add_trace(go.Scatter(
+                    x=exp_df['x'], y=exp_df['y'],
+                    mode='markers', name=f"Exp: {exp_name}",
+                    marker=dict(size=8, color=exp_colors[i % len(exp_colors)], symbol='diamond'),
+                    showlegend=True
+                ))
+
+        fig.update_layout(
+            title=dict(
+                text=f"Element Density vs Depth (Fluence: {selected_fluence:.1f} atoms/A² = {selected_fluence:.1f} ×10¹⁶ atoms/cm²)",
+                font=dict(size=28, color='black')),
+            xaxis_title=dict(text=depth_label, font=dict(size=24, color='black')),
+            yaxis_title=dict(text="Density (atoms/Ų)", font=dict(size=24, color='black')),
             yaxis_type="log" if y_axis_scale == "Logarithmic" else "linear",
             height=650,
             hovermode='x unified',
@@ -245,11 +303,15 @@ def create_multi_fluence_comparison(fluence_data, selected_fluences, depth_col, 
                         df_comp[f'{elem}_conc_smooth'] = gaussian_filter1d(df_comp[f'{elem}_conc'], sigma=smooth_sigma)
                     if f'{elem}_frac' in df_comp.columns:
                         df_comp[f'{elem}_frac_smooth'] = gaussian_filter1d(df_comp[f'{elem}_frac'], sigma=smooth_sigma)
+                    if f'{elem}_dens' in df_comp.columns:
+                        df_comp[f'{elem}_dens_smooth'] = gaussian_filter1d(df_comp[f'{elem}_dens'], sigma=smooth_sigma)
 
                 if 'N_total_conc' in df_comp.columns:
                     df_comp['N_total_conc_smooth'] = gaussian_filter1d(df_comp['N_total_conc'], sigma=smooth_sigma)
                 if 'N_total_frac' in df_comp.columns:
                     df_comp['N_total_frac_smooth'] = gaussian_filter1d(df_comp['N_total_frac'], sigma=smooth_sigma)
+                if 'N_total_dens' in df_comp.columns:
+                    df_comp['N_total_dens_smooth'] = gaussian_filter1d(df_comp['N_total_dens'], sigma=smooth_sigma)
                 if 'density' in df_comp.columns:
                     df_comp['density_smooth'] = gaussian_filter1d(df_comp['density'], sigma=smooth_sigma)
             except ImportError:
@@ -351,6 +413,53 @@ def create_multi_fluence_comparison(fluence_data, selected_fluences, depth_col, 
                     marker=dict(size=6, color=color)
                 ))
 
+        elif plot_type == "Density (ions/Å)":
+            if selected_elements and len(selected_elements) > 1:
+                if smooth_data and all(f'{elem}_dens_smooth' in df_comp.columns for elem in selected_elements):
+                    combined_dens = df_comp[[f'{elem}_dens_smooth' for elem in selected_elements]].sum(axis=1)
+                    display_name = f'Combined ({"+".join(selected_elements)}) (Fluence: {fluence:.1f}, smoothed)'
+                else:
+                    combined_dens = df_comp[
+                        [f'{elem}_dens' for elem in selected_elements if f'{elem}_dens' in df_comp.columns]].sum(axis=1)
+                    display_name = f'Combined ({"+".join(selected_elements)}) (Fluence: {fluence:.1f})'
+
+                comparison_fig.add_trace(go.Scatter(
+                    x=df_comp[depth_col], y=combined_dens,
+                    mode=mode, name=display_name,
+                    line=dict(color=color, width=3),
+                    marker=dict(size=6, color=color)
+                ))
+            elif selected_elements and len(selected_elements) == 1:
+                elem = selected_elements[0]
+                if smooth_data and f'{elem}_dens_smooth' in df_comp.columns:
+                    dens_data = df_comp[f'{elem}_dens_smooth']
+                    display_name = f'{elem} (Fluence: {fluence:.1f}, smoothed)'
+                else:
+                    dens_data = df_comp[f'{elem}_dens']
+                    display_name = f'{elem} (Fluence: {fluence:.1f})'
+
+                comparison_fig.add_trace(go.Scatter(
+                    x=df_comp[depth_col], y=dens_data,
+                    mode=mode, name=display_name,
+                    line=dict(color=color, width=3),
+                    marker=dict(size=6, color=color)
+                ))
+            else:
+                elem = element_names[0] if element_names else 'Ti'
+                if smooth_data and f'{elem}_dens_smooth' in df_comp.columns:
+                    dens_data = df_comp[f'{elem}_dens_smooth']
+                    display_name = f'{elem} (Fluence: {fluence:.1f}, smoothed)'
+                else:
+                    dens_data = df_comp[f'{elem}_dens']
+                    display_name = f'{elem} (Fluence: {fluence:.1f})'
+
+                comparison_fig.add_trace(go.Scatter(
+                    x=df_comp[depth_col], y=dens_data,
+                    mode=mode, name=display_name,
+                    line=dict(color=color, width=3),
+                    marker=dict(size=6, color=color)
+                ))
+
         else:
             if smooth_data and 'density_smooth' in df_comp.columns:
                 density_data = df_comp['density_smooth']
@@ -367,7 +476,9 @@ def create_multi_fluence_comparison(fluence_data, selected_fluences, depth_col, 
             ))
 
     y_title = "Atomic Fraction" if plot_type == "Atomic Fractions" else \
-        "Concentration (atoms/cm³)" if plot_type == "Concentrations (atoms/cm³)" else "Density (atoms/Ų)"
+        "Concentration (atoms/cm³)" if plot_type == "Concentrations (atoms/cm³)" else \
+            "Element Density (atoms/Ų)" if plot_type == "Density (ions/Å)" else \
+                "Total Density (atoms/Ų)"
 
     comparison_fig.update_layout(
         title=dict(text=f"Multi-Fluence Comparison: {plot_type}", font=dict(size=30, color='black')),
@@ -407,9 +518,20 @@ def perform_fluence_analysis(fluence_data, element_names, fluence_unit, selected
         elements_to_analyze.append(combined_name)
 
     use_fractions = (plot_type == "Atomic Fractions")
-    data_suffix = "_frac" if use_fractions else "_conc"
-    data_label = "Atomic Fraction" if use_fractions else "Concentration (atoms/cm³)"
-    metric_label = "Max Atomic Fraction" if use_fractions else "Max Concentration (atoms/cm³)"
+    use_density = (plot_type == "Density (ions/Å)")
+
+    if use_fractions:
+        data_suffix = "_frac"
+        data_label = "Atomic Fraction"
+        metric_label = "Max Atomic Fraction"
+    elif use_density:
+        data_suffix = "_dens"
+        data_label = "Density (atoms/Ų)"
+        metric_label = "Max Density (atoms/Ų)"
+    else:
+        data_suffix = "_conc"
+        data_label = "Concentration (atoms/cm³)"
+        metric_label = "Max Concentration (atoms/cm³)"
 
     for element in elements_to_analyze:
         max_values = []
@@ -429,11 +551,17 @@ def perform_fluence_analysis(fluence_data, element_names, fluence_unit, selected
                             df[f'{elem}_conc_smooth'] = gaussian_filter1d(df[f'{elem}_conc'], sigma=smooth_sigma)
                         if f'{elem}_frac' in df.columns:
                             df[f'{elem}_frac_smooth'] = gaussian_filter1d(df[f'{elem}_frac'], sigma=smooth_sigma)
+                        if f'{elem}_dens' in df.columns:
+                            df[f'{elem}_dens_smooth'] = gaussian_filter1d(df[f'{elem}_dens'], sigma=smooth_sigma)
 
                     if element.startswith('Combined_') and selected_elements:
                         if use_fractions:
                             combined_data = df[
                                 [f'{elem}_frac' for elem in selected_elements if f'{elem}_frac' in df.columns]].sum(
+                                axis=1)
+                        elif use_density:
+                            combined_data = df[
+                                [f'{elem}_dens' for elem in selected_elements if f'{elem}_dens' in df.columns]].sum(
                                 axis=1)
                         else:
                             combined_data = df[
@@ -448,12 +576,24 @@ def perform_fluence_analysis(fluence_data, element_names, fluence_unit, selected
 
             if element.startswith('Combined_') and selected_elements:
                 if smooth_data and all(f'{elem}{data_suffix}_smooth' in df.columns for elem in selected_elements):
-                    combined_data = df[[f'{elem}{data_suffix}_smooth' for elem in selected_elements]].sum(axis=1)
+                    if use_fractions:
+                        combined_data = df[[f'{elem}{data_suffix}_smooth' for elem in selected_elements]].sum(axis=1)
+                    elif use_density:
+                        combined_data = df[[f'{elem}{data_suffix}_smooth' for elem in selected_elements]].sum(axis=1)
+                    else:
+                        combined_data = df[[f'{elem}{data_suffix}_smooth' for elem in selected_elements]].sum(axis=1)
                     data_col = f'{element}{data_suffix}_smooth'
                     df[data_col] = combined_data
                 else:
-                    combined_data = df[[f'{elem}{data_suffix}' for elem in selected_elements if
-                                        f'{elem}{data_suffix}' in df.columns]].sum(axis=1)
+                    if use_fractions:
+                        combined_data = df[[f'{elem}{data_suffix}' for elem in selected_elements if
+                                            f'{elem}{data_suffix}' in df.columns]].sum(axis=1)
+                    elif use_density:
+                        combined_data = df[[f'{elem}{data_suffix}' for elem in selected_elements if
+                                            f'{elem}{data_suffix}' in df.columns]].sum(axis=1)
+                    else:
+                        combined_data = df[[f'{elem}{data_suffix}' for elem in selected_elements if
+                                            f'{elem}{data_suffix}' in df.columns]].sum(axis=1)
                     data_col = f'{element}{data_suffix}'
                     df[data_col] = combined_data
             else:
@@ -584,7 +724,12 @@ def perform_fluence_analysis(fluence_data, element_names, fluence_unit, selected
             for i, fluence in enumerate(fluence_values):
                 if i < len(analysis_results[element]['max_values']):
                     max_val = analysis_results[element]['max_values'][i]
-                    max_val_str = f"{max_val:.3f}" if use_fractions else f"{max_val:.2e}"
+                    if use_fractions:
+                        max_val_str = f"{max_val:.3f}"
+                    elif use_density:
+                        max_val_str = f"{max_val:.4f}"
+                    else:
+                        max_val_str = f"{max_val:.2e}"
 
                     summary_data.append({
                         'Element': display_name,
@@ -599,7 +744,13 @@ def perform_fluence_analysis(fluence_data, element_names, fluence_unit, selected
 
     csv = summary_df.to_csv(index=False)
     filename_suffix = "_smoothed" if smooth_data else ""
-    data_type_suffix = "_fractions" if use_fractions else "_concentrations"
+    if use_fractions:
+        data_type_suffix = "_fractions"
+    elif use_density:
+        data_type_suffix = "_density"
+    else:
+        data_type_suffix = "_concentrations"
+
     st.download_button(
         label="Download Analysis Results as CSV",
         data=csv,
@@ -712,12 +863,14 @@ def parse_sdtrimsp_file(file_content):
 
                     element_fractions = {}
                     element_concentrations = {}
+                    element_densities = {}
 
                     for idx, element in enumerate(element_names):
                         if idx + 2 < len(parts):
                             frac = float(parts[idx + 2])
                             element_fractions[f'{element}_frac'] = frac
                             element_concentrations[f'{element}_conc'] = density * frac * 1e24
+                            element_densities[f'{element}_dens'] = density * frac
 
                     data_entry = {
                         'depth_A': depth,
@@ -727,13 +880,16 @@ def parse_sdtrimsp_file(file_content):
 
                     data_entry.update(element_fractions)
                     data_entry.update(element_concentrations)
+                    data_entry.update(element_densities)
 
                     n_elements = [elem for elem in element_names if elem.startswith('N')]
                     if len(n_elements) > 1:
                         total_n_frac = sum(element_fractions.get(f'{elem}_frac', 0) for elem in n_elements)
                         total_n_conc = sum(element_concentrations.get(f'{elem}_conc', 0) for elem in n_elements)
+                        total_n_dens = sum(element_densities.get(f'{elem}_dens', 0) for elem in n_elements)
                         data_entry['N_total_frac'] = total_n_frac
                         data_entry['N_total_conc'] = total_n_conc
+                        data_entry['N_total_dens'] = total_n_dens
 
                     current_data.append(data_entry)
                     data_lines_found += 1
@@ -780,7 +936,6 @@ def parse_sdtrimsp_file(file_content):
 def main():
     st.set_page_config(page_title="SDTrimSP Plotter", layout="wide")
 
-
     st.title("📊 SDTrimSP Data Plotter")
     st.markdown("Upload your SDTrimSP output file to visualize concentration profiles and density distributions")
     css = '''
@@ -791,11 +946,11 @@ def main():
             font-weight: 600 !important;
             margin: 0 !important;
         }
-        
+
         .stTabs [data-baseweb="tab-list"] {
             gap: 20px !important;
         }
-        
+
         .stTabs [data-baseweb="tab-list"] button {
             background-color: #f0f4ff !important;
             border-radius: 12px !important;
@@ -804,23 +959,23 @@ def main():
             border: none !important;
             color: #1e3a8a !important;
         }
-        
+
         .stTabs [data-baseweb="tab-list"] button:hover {
             background-color: #dbe5ff !important;
             cursor: pointer;
         }
-        
+
         .stTabs [data-baseweb="tab-list"] button[aria-selected="true"] {
             background-color: #e0e7ff !important;
             color: #1e3a8a !important;
             font-weight: 700 !important;
             box-shadow: 0 2px 6px rgba(30, 58, 138, 0.3) !important;
-        
+
             /* Added underline (thicker) */
             border-bottom: 4px solid #1e3a8a !important;
             border-radius: 12px 12px 0 0 !important; /* keep rounded only on top */
         }
-        
+
         .stTabs [data-baseweb="tab-list"] button:focus {
             outline: none !important;
         }
@@ -849,8 +1004,8 @@ def main():
             st.sidebar.info("Upload POSCAR, .cif, or crystal.inp file for conversion and reorientation")
 
             crystal_file = st.sidebar.file_uploader("Upload POSCAR/CIF or crystal.inp",
-                                            key="crystal_converter",
-                                            accept_multiple_files=False)
+                                                    key="crystal_converter",
+                                                    accept_multiple_files=False)
 
             if crystal_file is not None:
                 file_content = str(crystal_file.read(), "utf-8")
@@ -911,11 +1066,9 @@ def main():
                             from pymatgen.io.vasp import Poscar
                             from io import StringIO
 
-
                             parser = CifParser(StringIO(file_content))
                             structure = parser.get_structures(primitive=False)[0]
                             poscar_string = str(Poscar(structure))
-
 
                             poscar_lines = poscar_string.strip().split('\n')
 
@@ -928,7 +1081,6 @@ def main():
 
                             elements = poscar_lines[5].split()
                             counts = [int(x) for x in poscar_lines[6].split()]
-
 
                             positions = []
                             atom_line_start = 8
@@ -1030,14 +1182,16 @@ def main():
                         st.info(f"Reoriented: X={new_x}, Y={new_y}, Z={new_z}")
 
                     st.sidebar.markdown("#### 📤 Export Format")
-                    export_format = st.sidebar.radio("Select output format:", ["crystal.inp", "POSCAR"], horizontal=True)
+                    export_format = st.sidebar.radio("Select output format:", ["crystal.inp", "POSCAR"],
+                                                     horizontal=True)
 
                     if export_format == "crystal.inp":
                         st.sidebar.markdown("**Cell Extension Parameter**")
                         cell_extension = st.sidebar.radio("Automatic cell extension:", [3, 5], horizontal=True,
-                                                  help="Controls automatic extension of the crystal cell in SDTrimSP")
-                        st.sidebar.markdown("<small>Only values 3 and 5 are currently supported in 7.01 version</small>",
-                                    unsafe_allow_html=True)
+                                                          help="Controls automatic extension of the crystal cell in SDTrimSP")
+                        st.sidebar.markdown(
+                            "<small>Only values 3 and 5 are currently supported in 7.01 version</small>",
+                            unsafe_allow_html=True)
 
                         crystal_inp = f"{crystal_name}\n"
                         crystal_inp += "1\n"
@@ -1097,7 +1251,7 @@ def main():
                             data=output_content,
                             file_name=output_filename,
                             mime="text/plain",
-                            type = 'primary'
+                            type='primary'
                         )
 
                         st.info(f"**Elements:** {', '.join(elements)} "
@@ -1125,26 +1279,22 @@ def main():
 
             st.markdown("---")
 
-
-
-
-
-        st.info("👆 Please upload your SDTrimSP output file above")
+        st.info("👆 Please upload your Dynamic SDTrimSP output file above, or select other modes from the sidebar.")
         st.markdown("""
         ### 📁 How to Use This App
-        
+
         If you find a bug or have questions, feel free to contact me at **[lebedmi2@cvut.cz](mailto:lebedmi2@cvut.cz)**  
         📺 *Illustrative video tutorial:* [Watch on YouTube](https://youtu.be/JBXGyuHMtGk?si=Twj-2FA28ogJ1jUr)
-        
+
         ---
-        
+
         #### 📤 Input Requirements:
         Upload the **output file** from a **dynamic SDTrimSP ion implantation simulation** containing data about **element depth distributions as a function of fluence**.
-        
+
         ✅ The app will **automatically load all data**.
-        
+
         ---
-        
+
         #### 📊 What You Can Do:
         - 📈 **Select and plot** depth concentration distributions:
           - in **atomic fraction**
@@ -1157,9 +1307,9 @@ def main():
           - **Depth positions of maxima**
           - **FWHM (Full Width at Half Maximum)** as a function of fluence
         - 💾 **Download profiles** for further analysis
-        
+
         ---
-        
+
         Enjoy using the app!
         """)
 
@@ -1264,7 +1414,7 @@ def main():
 
             plot_type = st.sidebar.radio(
                 "Select Plot Type:",
-                ["Atomic Fractions", "Concentrations (atoms/cm³)", "Density vs Depth"]
+                ["Atomic Fractions", "Concentrations (atoms/cm³)", "Density (ions/Å)", "Density vs Depth"]
             )
 
             st.sidebar.subheader("Plot Controls")
@@ -1369,11 +1519,15 @@ def main():
                             df[f'{element}_conc_smooth'] = gaussian_filter1d(df[f'{element}_conc'], sigma=smooth_sigma)
                         if f'{element}_frac' in df.columns:
                             df[f'{element}_frac_smooth'] = gaussian_filter1d(df[f'{element}_frac'], sigma=smooth_sigma)
+                        if f'{element}_dens' in df.columns:
+                            df[f'{element}_dens_smooth'] = gaussian_filter1d(df[f'{element}_dens'], sigma=smooth_sigma)
 
                     if 'N_total_conc' in df.columns:
                         df['N_total_conc_smooth'] = gaussian_filter1d(df['N_total_conc'], sigma=smooth_sigma)
                     if 'N_total_frac' in df.columns:
                         df['N_total_frac_smooth'] = gaussian_filter1d(df['N_total_frac'], sigma=smooth_sigma)
+                    if 'N_total_dens' in df.columns:
+                        df['N_total_dens_smooth'] = gaussian_filter1d(df['N_total_dens'], sigma=smooth_sigma)
                     if 'density' in df.columns:
                         df['density_smooth'] = gaussian_filter1d(df['density'], sigma=smooth_sigma)
 
@@ -1436,6 +1590,9 @@ def main():
                     elif plot_type == "Concentrations (atoms/cm³)":
                         data_suffix = "_conc"
                         data_unit = "(atoms/cm³)"
+                    elif plot_type == "Density (ions/Å)":
+                        data_suffix = "_dens"
+                        data_unit = "(atoms/Ų)"
                     else:
                         data_suffix = "_conc"
                         data_unit = "(atoms/cm³)"
@@ -1452,6 +1609,9 @@ def main():
                     elif plot_type == "Concentrations (atoms/cm³)" and 'N_total_conc' in df.columns:
                         display_cols.append('N_total_conc')
                         display_names.append(f'N Total {data_unit}')
+                    elif plot_type == "Density (ions/Å)" and 'N_total_dens' in df.columns:
+                        display_cols.append('N_total_dens')
+                        display_names.append(f'N Total {data_unit}')
 
                     available_cols = [col for col in display_cols if col in df.columns]
                     available_names = [display_names[i] for i, col in enumerate(display_cols) if col in df.columns]
@@ -1462,7 +1622,9 @@ def main():
                         st.dataframe(display_df, width='stretch')
 
                         csv = display_df.to_csv(index=False)
-                        data_type_name = "fractions" if plot_type == "Atomic Fractions" else "concentrations"
+                        data_type_name = "fractions" if plot_type == "Atomic Fractions" else \
+                            "density" if plot_type == "Density (ions/Å)" else \
+                                "concentrations"
                         st.download_button(
                             label="Download data as CSV",
                             data=csv,
@@ -1479,7 +1641,6 @@ def main():
             file_lines = file_content.split('\n')[:10]
             for i, line in enumerate(file_lines):
                 st.text(f"{i + 1:2d}: {line}")
-
 
 
 main()
