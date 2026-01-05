@@ -372,9 +372,6 @@ def density_calculator_interface():
         if st.session_state.calculation_done and 'result' in st.session_state:
             result = st.session_state.result
 
-            st.markdown("---")
-            st.success("✅ Calculation Complete!")
-
             st.markdown(f"""
             <div style='background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); 
                         padding: 20px; border-radius: 15px; text-align: center; margin: 10px 0;'>
