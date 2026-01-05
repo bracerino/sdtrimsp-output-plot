@@ -10,7 +10,6 @@ from density import density_calculator_interface
 
 
 def parse_experimental_data(file_content, filename):
-    """Parse experimental data from various delimited formats"""
     import pandas as pd
     import re
 
