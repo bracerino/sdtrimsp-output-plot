@@ -1285,6 +1285,7 @@ def main():
         If you find a bug or have questions, feel free to contact me at **[lebedmi2@cvut.cz](mailto:lebedmi2@cvut.cz)**  
         📺 *Video tutorial for the dynamic, fluence-dependent mode:* [Watch on YouTube](https://youtu.be/JBXGyuHMtGk?si=Twj-2FA28ogJ1jUr)
         📺 *Video tutorial for simulations of ion channeling and the static mode:* [Watch on YouTube](https://www.youtube.com/watch?v=41fctoKS4nU)
+        
         ---
 
         #### 📤 Input Requirements:
