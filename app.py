@@ -1279,8 +1279,15 @@ def main():
             st.markdown("---")
 
         st.info("👆 Please upload your Dynamic SDTrimSP output file above, or select other modes from the sidebar.")
+        with st.expander("📘 How to Cite", expanded=True):
+            st.markdown("""
+            If you like the app, please cite the following:
+            - (preprint, arXiv) [Lebeda, et al. Interactive Analysis of Static, Dynamic, and Crystalline SDTrimSP Simulations: Application to Nitrogen Ion Implantation into Vanadium]
+            (https://arxiv.org/abs/2601.04412)
+            """)
+            
         st.markdown("""
-        ### 📁 How to Use This App
+        ## 📁 How to Use This App
 
         If you find a bug or have questions, feel free to contact me at **[lebedmi2@cvut.cz](mailto:lebedmi2@cvut.cz)**  
         - 📺 *Video tutorial for the dynamic, fluence-dependent mode:* [Watch on YouTube](https://youtu.be/JBXGyuHMtGk?si=Twj-2FA28ogJ1jUr) 
