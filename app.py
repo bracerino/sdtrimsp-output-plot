@@ -1279,12 +1279,19 @@ def main():
             st.markdown("---")
 
         st.info("👆 Please upload your Dynamic SDTrimSP output file above, or select other modes from the sidebar.")
-        with st.expander("📘 How to Cite", expanded=True):
+        with st.expander("📘 How to **Cite**", expanded=False):
             st.markdown("""
             If you like the app, please cite the following:
-            - (preprint, arXiv) [Lebeda, et al. Interactive Analysis of Static, Dynamic, and Crystalline SDTrimSP Simulations: Application to Nitrogen Ion Implantation into Vanadium]
-            (https://arxiv.org/abs/2601.04412)
-            """)
+            - (preprint, arXiv) [Lebeda, M., et al. Interactive Analysis of Static, Dynamic, and Crystalline SDTrimSP Simulations: Application to Nitrogen Ion Implantation into Vanadium.](https://arxiv.org/abs/2601.04412)
+            ---
+            When using SDTrimSP,  please cite:
+            - [Mutzke, A., et al. SDTrimSP Version 7.00. 2024.](https://pure.mpg.de/rest/items/item_3577532/component/file_3579585/content)
+            
+            When using the main local GUI for SDTrimSP, please cite:
+            - [Szabo, P. S., et al. Graphical user interface for SDTrimSP to simulate sputtering, ion implantation and the dynamic effects of ion irradiation.](https://www.sciencedirect.com/science/article/pii/S0168583X22001069)
+            
+            """,
+            unsafe_allow_html=True)
             
         st.markdown("""
         ## 📁 How to Use This App
