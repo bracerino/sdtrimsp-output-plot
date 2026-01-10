@@ -1303,7 +1303,7 @@ def main():
         ---
         #### 🔄 Workflow
         """)
-        st.image("images/workflow.png", width="stretch")
+        st.image("images/Workflow2.png", width="stretch")
         st.markdown("""
         ---
         #### 📤 Input Requirements:
