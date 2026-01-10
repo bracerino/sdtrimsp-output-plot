@@ -1301,7 +1301,7 @@ def main():
         - 📺 2️⃣ *Video tutorial for simulations of ion channeling and the static mode:* [Watch on YouTube](https://www.youtube.com/watch?v=41fctoKS4nU)
         - 📺 3️⃣ *Video tutorial for compiling SDTrimSP and how to run calculations with its local GUI:* [Watch on YouTube](https://youtu.be/DwTXVmtTUzw?si=d5laSAouvtN7UuGl)
         ---
-        #### Workflow
+        #### 🔄 Workflow
         """)
         st.image("images/workflow.png", width="stretch")
         st.markdown("""
