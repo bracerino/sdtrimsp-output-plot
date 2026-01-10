@@ -1301,9 +1301,11 @@ def main():
         - 📺 2️⃣ *Video tutorial for simulations of ion channeling and the static mode:* [Watch on YouTube](https://www.youtube.com/watch?v=41fctoKS4nU)
         - 📺 3️⃣ *Video tutorial for compiling SDTrimSP and how to run calculations with its local GUI:* [Watch on YouTube](https://youtu.be/DwTXVmtTUzw?si=d5laSAouvtN7UuGl)
         ---
+        #### Workflow
         """)
         st.image("images/workflow.png", width="stretch")
         st.markdown("""
+        ---
         #### 📤 Input Requirements:
         Upload the **output file** from a **dynamic SDTrimSP ion implantation simulation** containing data about **element depth distributions as a function of fluence**.
 
