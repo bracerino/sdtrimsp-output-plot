@@ -936,7 +936,14 @@ def main():
     st.set_page_config(page_title="SDTrimSP Plotter", layout="wide")
 
     st.title("📊 SDTrimSP Data Plotter")
-    st.markdown("Upload your SDTrimSP output file to visualize concentration profiles and density distributions")
+    st.markdown(
+        """
+    Upload your SDTrimSP output files to visualize concentration profiles or select suitable mode from the sidebar.
+        **Software version notice:**  
+    The application is currently validated against **SDTrimSP 7.01 (7.00)**.  
+    Compatibility with newer versions will be implemented when possible and following updates to the publicly available documentation.
+    """
+    )
     css = '''
         <style>
         .stTabs [data-baseweb="tab-list"] button [data-testid="stMarkdownContainer"] p {
