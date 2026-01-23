@@ -1287,7 +1287,7 @@ def main():
         with st.expander("📘 How to **Cite**", expanded=False):
             st.markdown("""
             If you like this interactive app, please cite the following:
-            - (preprint, arXiv) [Lebeda, M., et al. Interactive Analysis of Static, Dynamic, and Crystalline SDTrimSP Simulations: Application to Nitrogen Ion Implantation into Vanadium.](https://arxiv.org/abs/2601.04412)
+            - [Lebeda, M., et al. Interactive Analysis of Static, Dynamic, and Crystalline SDTrimSP Simulations: Application to Nitrogen Ion Implantation into Vanadium.](https://doi.org/10.1016/j.commatsci.2026.114519)
             ---
             When using SDTrimSP,  please cite:
             - [Mutzke, A., et al. SDTrimSP Version 7.00. 2024.](https://pure.mpg.de/rest/items/item_3577532/component/file_3579585/content)
