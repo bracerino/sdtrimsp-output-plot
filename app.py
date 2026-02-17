@@ -8,7 +8,77 @@ import numpy as np
 
 from density import density_calculator_interface
 
+import zipfile
+import io
 
+def create_xy_zip(fluence_data, element_names, depth_col_key, plot_type, smooth_data, smooth_sigma, selected_elements):
+    zip_buffer = io.BytesIO()
+
+    with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
+        for fluence in sorted(fluence_data.keys()):
+            df = pd.DataFrame(fluence_data[fluence])
+
+            if smooth_data:
+                try:
+                    from scipy.ndimage import gaussian_filter1d
+                    for elem in element_names:
+                        for suffix in ('_conc', '_frac', '_dens'):
+                            col = f'{elem}{suffix}'
+                            if col in df.columns:
+                                df[f'{col}_smooth'] = gaussian_filter1d(df[col], sigma=smooth_sigma)
+                    if 'density' in df.columns:
+                        df['density_smooth'] = gaussian_filter1d(df['density'], sigma=smooth_sigma)
+                except ImportError:
+                    pass
+
+            depth = df[depth_col_key].values
+
+            # --- Per-element files ---
+            for elem in element_names:
+                if plot_type == "Atomic Fractions":
+                    col = f'{elem}_frac_smooth' if smooth_data and f'{elem}_frac_smooth' in df.columns else f'{elem}_frac'
+                elif plot_type == "Concentrations (atoms/cm³)":
+                    col = f'{elem}_conc_smooth' if smooth_data and f'{elem}_conc_smooth' in df.columns else f'{elem}_conc'
+                elif plot_type == "Density (ions/Å)":
+                    col = f'{elem}_dens_smooth' if smooth_data and f'{elem}_dens_smooth' in df.columns else f'{elem}_dens'
+                else:
+                    col = None
+
+                if col and col in df.columns:
+                    xy_lines = [f"{d:.6e}\t{v:.6e}" for d, v in zip(depth, df[col].values)]
+                    filename = f"fluence_{fluence:.4f}_{elem}.xy"
+                    zf.writestr(filename, "\n".join(xy_lines))
+
+            # --- Combined selected elements file ---
+            if selected_elements and len(selected_elements) > 1:
+                if plot_type == "Atomic Fractions":
+                    suffix = '_frac_smooth' if smooth_data else '_frac'
+                elif plot_type == "Concentrations (atoms/cm³)":
+                    suffix = '_conc_smooth' if smooth_data else '_conc'
+                elif plot_type == "Density (ions/Å)":
+                    suffix = '_dens_smooth' if smooth_data else '_dens'
+                else:
+                    suffix = None
+
+                if suffix:
+                    cols = [f'{e}{suffix}' for e in selected_elements if f'{e}{suffix}' in df.columns]
+                    if cols:
+                        combined = df[cols].sum(axis=1).values
+                        xy_lines = [f"{d:.6e}\t{v:.6e}" for d, v in zip(depth, combined)]
+                        combo_label = "+".join(selected_elements)
+                        filename = f"fluence_{fluence:.4f}_combined_{combo_label}.xy"
+                        zf.writestr(filename, "\n".join(xy_lines))
+
+            # --- Total density file ---
+            if plot_type == "Density vs Depth":
+                col = 'density_smooth' if smooth_data and 'density_smooth' in df.columns else 'density'
+                if col in df.columns:
+                    xy_lines = [f"{d:.6e}\t{v:.6e}" for d, v in zip(depth, df[col].values)]
+                    filename = f"fluence_{fluence:.4f}_total_density.xy"
+                    zf.writestr(filename, "\n".join(xy_lines))
+
+    zip_buffer.seek(0)
+    return zip_buffer
 def parse_experimental_data(file_content, filename):
     import pandas as pd
     import re
@@ -1441,7 +1511,7 @@ def main():
             )
 
             st.sidebar.subheader("Plot Controls")
-            col_ctrl1, col_ctrl2, col_ctrl3 = st.sidebar.columns(3)
+            col_ctrl1, col_ctrl2, col_ctrl3 = st.columns(3)
 
             with col_ctrl1:
                 depth_unit = st.radio("Depth Units:", ["Angstroms (Å)", "Nanometers (nm)"], key="depth_unit")
@@ -1527,6 +1597,20 @@ def main():
                     default=[fluence_values[0], fluence_values[-1]] if len(fluence_values) > 1 else [fluence_values[0]]
                 )
 
+            st.sidebar.subheader("💾 Bulk Download")
+            depth_key = 'depth_A' if depth_unit == "Angstroms (Å)" else 'depth_nm'
+            zip_buf = create_xy_zip(
+                fluence_data, element_names, depth_key,
+                plot_type, smooth_data, smooth_sigma, selected_elements
+            )
+            smoothed_tag = "_smoothed" if smooth_data else ""
+            st.sidebar.download_button(
+                label="📦 Download all fluences (.xy ZIP)",
+                data=zip_buf,
+                file_name=f"sdtrimsp_all_fluences{smoothed_tag}.zip",
+                mime="application/zip",
+                type = 'primary'
+            )
             data = fluence_data[selected_fluence]
             df = pd.DataFrame(data)
 
