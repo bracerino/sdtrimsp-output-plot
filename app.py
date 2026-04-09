@@ -1069,6 +1069,10 @@ def main():
 
         if st.sidebar.checkbox("Open Density Calculator"):
             density_calculator_interface()
+        from concentration_converter import concentration_converter_interface
+        if st.sidebar.checkbox("🔄 Concentration Converter"):
+            concentration_converter_interface()
+
         st.sidebar.markdown("---")
         st.sidebar.subheader("🔄 POSCAR/CIF to crystal.inp")
         convert_crystal = st.sidebar.checkbox("Convert POSCAR/CIF to crystal.inp")
