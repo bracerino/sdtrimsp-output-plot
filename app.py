@@ -1096,7 +1096,7 @@ def main():
     st.link_button("⭐ View on GitHub", "https://github.com/bracerino/sdtrimsp-output-plot/")
     st.sidebar.info(f"❤️🫶 **[Donations always appreciated!](https://buymeacoffee.com/bracerino)**")
     st.sidebar.info(
-        "🌀 Developed by **[Implant team](https://implant.fs.cvut.cz/)**. "
+        "🌀 Developed by **[IMPLANT team](https://implant.fs.cvut.cz/)**. "
         "📘 See our corresponding **[article](https://www.sciencedirect.com/science/article/abs/pii/S0927025626000388?via%3Dihub)**. Spot a bug or have a feature requests? Let us know at **lebedmi2@cvut.cz**."
     )
     
