@@ -1093,7 +1093,7 @@ def main():
     show_crystal = st.sidebar.checkbox("🔄 POSCAR/CIF → crystal structure", value=False, key="show_crystal")
     st.sidebar.markdown("---")
 
-    st.link_button("⭐ View on GitHub", "https://github.com/bracerino/sdtrimsp-output-plot/")
+    st.sidebar.link_button("⭐ View on GitHub", "https://github.com/bracerino/sdtrimsp-output-plot/")
     st.sidebar.info(f"❤️🫶 **[Donations always appreciated!](https://buymeacoffee.com/bracerino)**")
     st.sidebar.info(
         "🌀 Developed by **[IMPLANT team](https://implant.fs.cvut.cz/)**. "
