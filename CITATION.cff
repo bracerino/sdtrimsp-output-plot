@@ -1,0 +1,37 @@
+cff-version: 1.2.0
+message: "If you use this software/paper, please cite the following article."
+title: "Interactive analysis of static, dynamic, and crystalline SDTrimSP simulations: Application to nitrogen ion implantation into vanadium"
+authors:
+  - family-names: Lebeda
+    given-names: Miroslav
+  - family-names: Drahokoupil
+    given-names: Jan
+  - family-names: Smola
+    given-names: Vojtěch
+  - family-names: Vlčák
+    given-names: Petr
+version: 1.0.0
+identifiers:
+  - type: doi
+    value: 10.1016/j.commatsci.2026.114519
+date-released: 2026-02-20
+type: article
+url: "https://doi.org/10.1016/j.commatsci.2026.114519"
+
+preferred-citation:
+  type: article
+  authors:
+    - family-names: Lebeda
+      given-names: Miroslav
+    - family-names: Drahokoupil
+      given-names: Jan
+    - family-names: Smola
+      given-names: Vojtěch
+    - family-names: Vlčák
+      given-names: Petr
+  title: "Interactive analysis of static, dynamic, and crystalline SDTrimSP simulations: Application to nitrogen ion implantation into vanadium"
+  journal: "Computational Materials Science"
+  volume: 265
+  year: 2026
+  doi: 10.1016/j.commatsci.2026.114519
+  url: "https://doi.org/10.1016/j.commatsci.2026.114519"
