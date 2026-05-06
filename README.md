@@ -2,7 +2,7 @@
 SDTrimSP output analysis of depth distributions for simulations of ion implantation. Try the application online at: http://sdtrimsp.streamlit.app/.
 
 If you like this app, please cite: 
-- [Lebeda, M., et al. Interactive Analysis of Static, Dynamic, and Crystalline SDTrimSP Simulations: Application to Nitrogen Ion Implantation into Vanadium. 2026.](https://www.sciencedirect.com/science/article/abs/pii/S0927025626000388?via%3Dihub)
+- 📘 [Lebeda, M., et al. Interactive Analysis of Static, Dynamic, and Crystalline SDTrimSP Simulations: Application to Nitrogen Ion Implantation into Vanadium. 2026.](https://www.sciencedirect.com/science/article/abs/pii/S0927025626000388?via%3Dihub)
 
 
 ### **How to use the app**  
