@@ -6,10 +6,11 @@ from plotly.subplots import make_subplots
 import re
 import numpy as np
 
-from density import density_calculator_interface
+from helpers.density import density_calculator_interface
 
 import zipfile
 import io
+
 
 def create_xy_zip(fluence_data, element_names, depth_col_key, plot_type, smooth_data, smooth_sigma, selected_elements):
     zip_buffer = io.BytesIO()
@@ -79,6 +80,8 @@ def create_xy_zip(fluence_data, element_names, depth_col_key, plot_type, smooth_
 
     zip_buffer.seek(0)
     return zip_buffer
+
+
 def parse_experimental_data(file_content, filename):
     import pandas as pd
     import re
@@ -1005,12 +1008,32 @@ def parse_sdtrimsp_file(file_content):
 def main():
     st.set_page_config(page_title="SDTrimSP Plotter", layout="wide")
 
-    st.title("📊 SDTrimSP Data Plotter")
+    st.markdown(
+        "<h2 style='font-size: 32px;'>📊 SDTrimSP Data Plotter and Helpful Tools</h2>",
+        unsafe_allow_html=True
+    )
     st.markdown(
         """
-        **Software version notice:** The application is currently valid for **SDTrimSP 7.01 (7.00)**. 
-        Compatibility with newer versions will be implemented when possible and following updates to the publicly available documentation.
-    """
+        <div style="
+            display: inline-block;
+            background-color: #ffffff;
+            border-left: 5px solid #2563eb;
+            border-radius: 10px;
+            padding: 10px 16px;
+            margin-top: -4px;
+            margin-bottom: 24px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.10);
+            color: #111827;
+            font-size: 0.95rem;
+            font-weight: 600;
+        ">
+            <span style="color:#2563eb; font-weight:800;">Release:</span>
+            v0.5 &nbsp; | &nbsp;
+            <span style="color:#2563eb; font-weight:800;">Updated:</span>
+            May 6, 2026
+        </div>
+        """,
+        unsafe_allow_html=True
     )
     css = '''
         <style>
@@ -1057,307 +1080,25 @@ def main():
         '''
 
     st.markdown(css, unsafe_allow_html=True)
-    from static_mode import create_static_mode_interface
+    from helpers.static_mode import create_static_mode_interface
     if create_static_mode_interface():
         return
-    uploaded_file = st.file_uploader("Choose SDTrimSP output file")
 
-    if uploaded_file is None:
-
-        st.sidebar.markdown("---")
-        st.sidebar.subheader("🧮 Atomic Density Calculator")
-
-        if st.sidebar.checkbox("Open Density Calculator"):
-            density_calculator_interface()
-        from concentration_converter import concentration_converter_interface
-        if st.sidebar.checkbox("🔄 Concentration Converter"):
-            concentration_converter_interface()
-
-        st.sidebar.markdown("---")
-        st.sidebar.subheader("🔄 POSCAR/CIF to crystal.inp")
-        convert_crystal = st.sidebar.checkbox("Convert POSCAR/CIF to crystal.inp")
-
-        if convert_crystal:
-            st.markdown("### 🔄 Crystal Structure File Converter")
-            st.sidebar.info("Upload POSCAR, .cif, or crystal.inp file for conversion and reorientation")
-
-            crystal_file = st.sidebar.file_uploader("Upload POSCAR/CIF or crystal.inp",
-                                                    key="crystal_converter",
-                                                    accept_multiple_files=False)
-
-            if crystal_file is not None:
-                file_content = str(crystal_file.read(), "utf-8")
-                lines = file_content.strip().split('\n')
-
-                file_type = None
-                if 'crystal.inp' in crystal_file.name.lower() or '.inp' in crystal_file.name.lower():
-                    if len(lines) > 3 and lines[1].strip().isdigit():
-                        file_type = "crystal.inp"
-                elif 'cif' in crystal_file.name.lower() or any('_cell_length' in line for line in lines[:20]):
-                    file_type = "cif"
-                elif len(lines) > 7:
-                    try:
-                        float(lines[1].strip())
-                        file_type = "POSCAR"
-                    except:
-                        pass
-
-                if file_type:
-                    st.success(f"✅ Detected file format: **{file_type}**")
-                else:
-                    st.error("❌ Could not detect file format")
-                    st.stop()
-
-                try:
-                    import numpy as np
-
-                    if file_type == "crystal.inp":
-                        crystal_name = lines[0].strip()
-                        num_species = int(lines[2].strip())
-
-                        elements = []
-                        line_idx = 3
-                        for i in range(num_species):
-                            elem = lines[line_idx].strip().strip('"').strip("'")
-                            elements.append(elem)
-                            line_idx += 1
-
-                        v1 = [float(x) for x in lines[line_idx].split()]
-                        v2 = [float(x) for x in lines[line_idx + 1].split()]
-                        v3 = [float(x) for x in lines[line_idx + 2].split()]
-                        line_idx += 3
-
-                        num_atoms = int(lines[line_idx].strip())
-                        line_idx += 1
-
-                        positions = []
-                        for i in range(num_atoms):
-                            pos_data = lines[line_idx].split()
-                            x, y, z = float(pos_data[0]), float(pos_data[1]), float(pos_data[2])
-                            elem_idx = int(pos_data[3])
-                            positions.append([x, y, z, elem_idx])
-                            line_idx += 1
-
-                    elif file_type == "cif":
-                        try:
-                            from pymatgen.io.cif import CifParser
-                            from pymatgen.io.vasp import Poscar
-                            from io import StringIO
-
-                            parser = CifParser(StringIO(file_content))
-                            structure = parser.get_structures(primitive=False)[0]
-                            poscar_string = str(Poscar(structure))
-
-                            poscar_lines = poscar_string.strip().split('\n')
-
-                            crystal_name = crystal_file.name.replace('.cif', '').replace('.txt', '')
-                            scale = float(poscar_lines[1].strip())
-
-                            v1 = [float(x) * scale for x in poscar_lines[2].split()]
-                            v2 = [float(x) * scale for x in poscar_lines[3].split()]
-                            v3 = [float(x) * scale for x in poscar_lines[4].split()]
-
-                            elements = poscar_lines[5].split()
-                            counts = [int(x) for x in poscar_lines[6].split()]
-
-                            positions = []
-                            atom_line_start = 8
-                            atom_idx = 0
-
-                            for elem_idx, (elem, count) in enumerate(zip(elements, counts)):
-                                for i in range(count):
-                                    pos_line = poscar_lines[atom_line_start + atom_idx].split()
-                                    x, y, z = float(pos_line[0]), float(pos_line[1]), float(pos_line[2])
-                                    positions.append([x, y, z, elem_idx + 1])
-                                    atom_idx += 1
-
-                        except ImportError:
-                            st.error("❌ pymatgen is required for CIF file conversion.")
-                            st.code("pip install pymatgen")
-                            st.stop()
-                        except Exception as e:
-                            st.error(f"❌ Error converting CIF file: {str(e)}")
-                            import traceback
-                            st.code(traceback.format_exc())
-                            st.stop()
-
-                    else:
-                        crystal_name = lines[0].strip()
-                        scale = float(lines[1].strip())
-
-                        v1 = [float(x) * scale for x in lines[2].split()]
-                        v2 = [float(x) * scale for x in lines[3].split()]
-                        v3 = [float(x) * scale for x in lines[4].split()]
-
-                        elements = lines[5].split()
-                        counts = [int(x) for x in lines[6].split()]
-
-                        coord_type = lines[7].strip().lower()
-
-                        positions = []
-                        atom_line_start = 8
-                        atom_idx = 0
-
-                        for elem_idx, (elem, count) in enumerate(zip(elements, counts)):
-                            for i in range(count):
-                                pos_line = lines[atom_line_start + atom_idx].split()
-                                x, y, z = float(pos_line[0]), float(pos_line[1]), float(pos_line[2])
-
-                                if coord_type.startswith('c') or coord_type.startswith('k'):
-                                    lat_matrix = np.array([v1, v2, v3]).T
-                                    lat_inv = np.linalg.inv(lat_matrix)
-                                    cart_pos = np.array([x, y, z])
-                                    frac_pos = lat_inv @ cart_pos
-                                    x, y, z = frac_pos
-
-                                positions.append([x, y, z, elem_idx + 1])
-                                atom_idx += 1
-
-                    if len(positions) > 16:
-                        st.warning(
-                            f"⚠️ **Warning:** Your structure has {len(positions)} atoms. SDTrimSP 7.01 supports maximum 16 atoms in crystal.inp")
-
-                    st.markdown("#### 🔄 Crystal Reorientation")
-                    reorient = st.checkbox("Reorient crystal lattice vectors")
-
-                    if reorient:
-                        col_r1, col_r2, col_r3 = st.columns(3)
-
-                        with col_r1:
-                            new_x = st.selectbox("New X direction:", ["a", "b", "c", "-a", "-b", "-c"], index=0,
-                                                 key="new_x")
-                        with col_r2:
-                            new_y = st.selectbox("New Y direction:", ["a", "b", "c", "-a", "-b", "-c"], index=1,
-                                                 key="new_y")
-                        with col_r3:
-                            new_z = st.selectbox("New Z direction:", ["a", "b", "c", "-a", "-b", "-c"], index=2,
-                                                 key="new_z")
-
-                        vector_map = {"a": v1, "b": v2, "c": v3, "-a": [-x for x in v1], "-b": [-x for x in v2],
-                                      "-c": [-x for x in v3]}
-
-                        new_v1 = vector_map[new_x]
-                        new_v2 = vector_map[new_y]
-                        new_v3 = vector_map[new_z]
-
-                        old_matrix = np.array([v1, v2, v3]).T
-                        new_matrix = np.array([new_v1, new_v2, new_v3]).T
-
-                        transformation = np.linalg.inv(old_matrix) @ new_matrix
-
-                        new_positions = []
-                        for pos in positions:
-                            frac_pos = np.array([pos[0], pos[1], pos[2]])
-                            new_frac_pos = np.linalg.inv(transformation.T) @ frac_pos
-
-                            new_frac_pos = new_frac_pos % 1.0
-
-                            new_positions.append([new_frac_pos[0], new_frac_pos[1], new_frac_pos[2], pos[3]])
-
-                        v1, v2, v3 = new_v1, new_v2, new_v3
-                        positions = new_positions
-
-                        st.info(f"Reoriented: X={new_x}, Y={new_y}, Z={new_z}")
-
-                    st.sidebar.markdown("#### 📤 Export Format")
-                    export_format = st.sidebar.radio("Select output format:", ["crystal.inp", "POSCAR"],
-                                                     horizontal=True)
-
-                    if export_format == "crystal.inp":
-                        st.sidebar.markdown("**Cell Extension Parameter**")
-                        cell_extension = st.sidebar.radio("Automatic cell extension:", [3, 5], horizontal=True,
-                                                          help="Controls automatic extension of the crystal cell in SDTrimSP")
-                        st.sidebar.markdown(
-                            "<small>Only values 3 and 5 are currently supported in 7.01 version</small>",
-                            unsafe_allow_html=True)
-
-                        crystal_inp = f"{crystal_name}\n"
-                        crystal_inp += "1\n"
-                        crystal_inp += f"{len(elements)}\n"
-
-                        for elem in elements:
-                            crystal_inp += f'"{elem}"\n'
-
-                        crystal_inp += f"{v1[0]:.4f} {v1[1]:.4f} {v1[2]:.4f}\n"
-                        crystal_inp += f"{v2[0]:.4f} {v2[1]:.4f} {v2[2]:.4f}\n"
-                        crystal_inp += f"{v3[0]:.4f} {v3[1]:.4f} {v3[2]:.4f}\n"
-
-                        crystal_inp += f"{len(positions)}\n"
-
-                        for pos in positions:
-                            crystal_inp += f"{pos[0]:.4f} {pos[1]:.4f} {pos[2]:.4f} {pos[3]}\n"
-
-                        crystal_inp += "0.0\n"
-                        crystal_inp += "0.0 0.0\n"
-                        crystal_inp += f"{cell_extension}\n"
-
-                        output_content = crystal_inp
-                        output_filename = f"{crystal_name}_crystal.inp"
-
-                    else:
-                        elem_counts = {}
-                        for pos in positions:
-                            elem_idx = pos[3]
-                            elem_counts[elem_idx] = elem_counts.get(elem_idx, 0) + 1
-
-                        sorted_positions = sorted(positions, key=lambda x: x[3])
-
-                        poscar = f"{crystal_name}\n"
-                        poscar += "1.0\n"
-                        poscar += f"{v1[0]:16.8f} {v1[1]:16.8f} {v1[2]:16.8f}\n"
-                        poscar += f"{v2[0]:16.8f} {v2[1]:16.8f} {v2[2]:16.8f}\n"
-                        poscar += f"{v3[0]:16.8f} {v3[1]:16.8f} {v3[2]:16.8f}\n"
-
-                        poscar += " ".join(elements) + "\n"
-                        poscar += " ".join(str(elem_counts[i + 1]) for i in range(len(elements))) + "\n"
-                        poscar += "Direct\n"
-
-                        for pos in sorted_positions:
-                            poscar += f"{pos[0]:16.8f} {pos[1]:16.8f} {pos[2]:16.8f}\n"
-
-                        output_content = poscar
-                        output_filename = f"{crystal_name}_POSCAR"
-
-                    col1, col2 = st.columns(2)
-
-                    with col1:
-                        st.text_area(f"Preview {export_format}:", output_content, height=400)
-
-                    with col2:
-                        st.download_button(
-                            label=f"📥 Download {export_format}",
-                            data=output_content,
-                            file_name=output_filename,
-                            mime="text/plain",
-                            type='primary'
-                        )
-
-                        st.info(f"**Elements:** {', '.join(elements)} "
-                                f"\n\n"
-                                f"**Number of atoms:** {len(positions)}"
-                                f"\n\n"
-                                f"**Lattice vectors (Å):**")
-                        st.code(f"a = [{v1[0]:.4f}, {v1[1]:.4f}, {v1[2]:.4f}]\n"
-                                f"b = [{v2[0]:.4f}, {v2[1]:.4f}, {v2[2]:.4f}]\n"
-                                f"c = [{v3[0]:.4f}, {v3[1]:.4f}, {v3[2]:.4f}]")
-
-                        lengths = [
-                            np.linalg.norm(v1),
-                            np.linalg.norm(v2),
-                            np.linalg.norm(v3)
-                        ]
-                        st.info(f"**Lattice parameters (Å):**")
-                        st.code(f"|a| = {lengths[0]:.4f}\n|b| = {lengths[1]:.4f}\n|c| = {lengths[2]:.4f}")
-
-                except Exception as e:
-                    st.error(f"Error converting file: {str(e)}")
-                    st.info("Please ensure the file is in valid format.")
-                    import traceback
-                    st.code(traceback.format_exc())
-
-            st.markdown("---")
-
-        st.info("👆 Please upload your Dynamic SDTrimSP output file above, or select other modes from the sidebar.")
+    # ── Sidebar tool checkboxes (always visible, all off by default) ──────────
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("🛠️ Tools")
+    show_dynamic = st.sidebar.checkbox("📊 Dynamic SDTrimSP Mode", value=False, key="show_dynamic")
+    show_density = st.sidebar.checkbox("🧮 Atomic Density Calculator", value=False, key="show_density")
+    show_conv = st.sidebar.checkbox("🔄 Concentration Converter", value=False, key="show_conv")
+    show_crystal = st.sidebar.checkbox("🔄 POSCAR/CIF → crystal structure", value=False, key="show_crystal")
+    st.sidebar.markdown("---")
+
+    # ── Landing page: shown when no tool is selected ──────────────────────────
+    if not any([show_dynamic, show_density, show_conv, show_crystal]):
+        st.info(
+            "👈 **Select a tool from the sidebar to get started.** "
+            "Choose one or more of the available tools to begin your analysis."
+        )
         with st.expander("📘 How to **Cite**", expanded=False):
             st.markdown("""
             If you like this interactive app, please cite the following:
@@ -1365,13 +1106,13 @@ def main():
             ---
             When using SDTrimSP,  please cite:
             - [Mutzke, A., et al. SDTrimSP Version 7.00. 2024.](https://pure.mpg.de/rest/items/item_3577532/component/file_3579585/content)
-            
+
             When using the main local GUI for SDTrimSP, please cite:
             - [Szabo, P. S., et al. Graphical user interface for SDTrimSP to simulate sputtering, ion implantation and the dynamic effects of ion irradiation.](https://www.sciencedirect.com/science/article/pii/S0168583X22001069)
-            
+
             """,
-            unsafe_allow_html=True)
-            
+                        unsafe_allow_html=True)
+
         st.markdown("""
         #### 📁 How to Use This App
 
@@ -1382,7 +1123,7 @@ def main():
         ---
         #### 🔄 Workflow
         """)
-        st.image("images/Workflow2.png", width="stretch")
+        st.image("images/Workflow2.png", width='content')
         st.markdown("""
         ---
         #### 📤 Input Requirements:
@@ -1409,7 +1150,28 @@ def main():
 
         Enjoy using the app!
         """)
+        return
 
+    # ── Tool panels ───────────────────────────────────────────────────────────
+    if show_density:
+        density_calculator_interface()
+
+    if show_conv:
+        from helpers.concentration_converter import concentration_converter_interface
+        concentration_converter_interface()
+
+    if show_crystal:
+        from helpers.crystal_converter_module import crystal_converter_interface
+        crystal_converter_interface()
+
+    # ── Dynamic mode ──────────────────────────────────────────────────────────
+    if not show_dynamic:
+        return
+
+    uploaded_file = st.file_uploader("Choose SDTrimSP output file")
+
+    if uploaded_file is None:
+        st.info("👆 Please upload your Dynamic SDTrimSP output file above.")
         return
 
     if uploaded_file is not None:
@@ -1613,7 +1375,7 @@ def main():
                 data=zip_buf,
                 file_name=f"sdtrimsp_all_fluences{smoothed_tag}.zip",
                 mime="application/zip",
-                type = 'primary'
+                type='primary'
             )
             data = fluence_data[selected_fluence]
             df = pd.DataFrame(data)
