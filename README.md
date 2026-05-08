@@ -6,6 +6,7 @@ If you like this app, please cite:
 
 
 ### **How to use the app**  
+- Convert POSCAR/CIF to SDTRimSP compatible format for implantation into crystals 
 - Upload the output file from dynamic SDTrimSP ion implantation simulation containing the information about element depth distributions depending on the fluence  
 - The app will automatically load all data
 - You can then select the concentrations (either in atomic fraction or atoms/cm3 units) or target density to plot it for specific fluence  
