@@ -3,6 +3,24 @@ import numpy as np
 import io
 
 
+def _format_poscar(crystal_name, v1, v2, v3, elements, frac_positions, elem_indices):
+    grouped = {i + 1: [] for i in range(len(elements))}
+    for frac, eidx in zip(frac_positions, elem_indices):
+        grouped[eidx].append(frac)
+
+    counts = [len(grouped[i + 1]) for i in range(len(elements))]
+
+    lines = [crystal_name, "1.0"]
+    for v in (v1, v2, v3):
+        lines.append(f"  {v[0]:18.12f}  {v[1]:18.12f}  {v[2]:18.12f}")
+    lines.append("  " + "  ".join(elements))
+    lines.append("  " + "  ".join(str(c) for c in counts))
+    lines.append("Direct")
+    for i in range(len(elements)):
+        for frac in grouped[i + 1]:
+            lines.append(f"  {frac[0]:18.12f}  {frac[1]:18.12f}  {frac[2]:18.12f}")
+    return "\n".join(lines) + "\n"
+    
 def _is_orthogonal(v1, v2, v3, tol=1e-4):
     a, b, c = np.array(v1), np.array(v2), np.array(v3)
     return (
@@ -341,7 +359,15 @@ def crystal_converter_interface():
             f"Angles   : a={alpha:.3f}  b={beta:.3f}  g={gamma:.3f} deg  "
             f"({'orthogonal' if ortho else 'NON-ORTHOGONAL — bounding box used'})"
         )
-
+    poscar_str = _format_poscar(
+        crystal_name, v1, v2, v3, elements, frac_positions, elem_indices
+    )
+    st.download_button(
+        "⬇️ Download as POSCAR",
+        data=poscar_str,
+        file_name=f"{crystal_name}_POSCAR",
+        mime="text/plain",
+    )
     if n_atoms > 16:
         st.warning(f"Structure has {n_atoms} atoms. SDTrimSP 7.01 supports max 16.")
 
