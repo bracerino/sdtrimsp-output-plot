@@ -1093,12 +1093,13 @@ def main():
     show_crystal = st.sidebar.checkbox("🔄 POSCAR/CIF → crystal structure", value=False, key="show_crystal")
     st.sidebar.markdown("---")
 
-    st.sidebar.link_button("⭐ View on GitHub", "https://github.com/bracerino/sdtrimsp-output-plot/")
-    st.sidebar.info(f"❤️🫶 **[Donations always appreciated!](https://buymeacoffee.com/bracerino)**")
-    st.sidebar.info(
-        "🌀 Developed by **[IMPLANT team](https://implant.fs.cvut.cz/)**. "
-        "📘 See our corresponding **[article](https://www.sciencedirect.com/science/article/abs/pii/S0927025626000388?via%3Dihub)**. Spot a bug or have a feature requests? Let us know at **lebedmi2@cvut.cz**."
-    )
+    if not any([show_dynamic, show_density, show_conv, show_crystal]):
+        st.sidebar.link_button("⭐ View on GitHub", "https://github.com/bracerino/sdtrimsp-output-plot/")
+        st.sidebar.info(f"❤️🫶 **[Donations always appreciated!](https://buymeacoffee.com/bracerino)**")
+        st.sidebar.info(
+            "🌀 Developed by **[IMPLANT team](https://implant.fs.cvut.cz/)**. "
+            "📘 See our corresponding **[article](https://www.sciencedirect.com/science/article/abs/pii/S0927025626000388?via%3Dihub)**. Spot a bug or have a feature requests? Let us know at **lebedmi2@cvut.cz**."
+        )
     
     # ── Landing page: shown when no tool is selected ──────────────────────────
     if not any([show_dynamic, show_density, show_conv, show_crystal]):
