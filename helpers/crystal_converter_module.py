@@ -402,6 +402,11 @@ def crystal_converter_interface():
 
     # ─── Branch B: table.crystal (>=7.02) ────────────────────────────────────
     st.markdown("#### Output: table.crystal entries  (SDTrimSP >= 7.02)")
+    st.info(
+        "ℹ️ **When adding a new crystal structure to `table.crystal`**, also update "
+        "the count on **line 2** of the file (the integer in front of "
+        "`number of crystal-structure or type`)"
+    )
     if not ortho:
         st.warning(
             "Non-orthogonal crystal: the bounding-box coordinates below are a "
@@ -424,13 +429,16 @@ def crystal_converter_interface():
         st.markdown("**Part 2 — Geometry table line**")
         st.caption(
             "`typ` is set automatically to the Nr-crystal index above. "
-            "`matrix_id` is almost always 3 — change only if your SDTrimSP installation uses a different value."
+            "`matrix_id` controls the **internal supercell multiplication** — "
+            "use **3** for a 3×3×3 expansion or **5** for a 5×5×5 expansion of the unit cell."
         )
         table_name = st.text_input("Entry name (table column):", value=crystal_name,
                                    help="Free name, e.g. TiN_NaCl, VN_NaCl.")
-        matrix_id = st.number_input(
-            "matrix_id:", min_value=1, max_value=9999, value=3, step=1,
-            help="Fixed interaction-matrix selector — 3 in all standard table.crystal entries.",
+        matrix_id = st.radio(
+            "matrix_id (internal supercell multiplication):",
+            options=[3, 5], horizontal=True,
+            help="Internal multiplication factor used to build the supercell. "
+                 "Only 3 (3×3×3 expansion) or 5 (5×5×5 expansion) are valid.",
         )
         delta_hf = st.number_input("Heat of formation dH_f (eV):",
                                    value=0.0, step=0.001, format="%.4f",
@@ -484,7 +492,7 @@ def crystal_converter_interface():
 | density | at./Å³ | N / (dx·dy·dz) |
 | ΔH_f | eV | Heat of formation (0 for elements) |
 | p_max | Å | Max interaction cutoff (3.0–3.5 typical) |
-| matrix_id | – | Interaction-matrix selector — **always 3** in all standard entries |
+| matrix_id | – | Internal supercell multiplication — **3** (3×3×3) or **5** (5×5×5) |
 | typ | – | Nr-crystal index from the crystal-structure list (Part 1): 1=NaCl-type, 2=fcc, 3=bcc, 4=diamond, or your custom index |
 | n_elements | – | Number of distinct element types |
 | n_atoms | – | Total atoms per unit cell |
