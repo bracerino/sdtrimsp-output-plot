@@ -70,6 +70,315 @@ def parse_experimental_data(file_content, filename):
     return df, f"Successfully parsed {len(data_points)} points using delimiter '{best_delimiter}'"
 
 
+def parse_sdtrimsp_output_file(file_content, filename):
+    lines = file_content.split('\n')
+
+    components = {}
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped.startswith('CPT') and 'SYMBOL' in stripped and 'A-MASS' in stripped:
+            j = i + 1
+            while j < len(lines):
+                row = lines[j].strip()
+                if not row:
+                    break
+                parts = row.split()
+                if len(parts) < 2:
+                    break
+                try:
+                    cpt = int(parts[0])
+                    symbol = parts[1]
+                    components[cpt] = symbol
+                except ValueError:
+                    break
+                j += 1
+            break
+
+    projectile = None
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped.startswith('CPT') and 'E0' in stripped and ('AlPHA0' in stripped or 'ALPHA0' in stripped):
+            j = i + 1
+            while j < len(lines):
+                row = lines[j].strip()
+                if not row:
+                    break
+                parts = row.split()
+                if len(parts) < 2:
+                    break
+                try:
+                    cpt = int(parts[0])
+                    e0 = float(parts[1])
+                    if e0 > 0:
+                        projectile = {
+                            'cpt': cpt,
+                            'symbol': components.get(cpt, f'cpt{cpt}'),
+                            'energy_eV': e0
+                        }
+                except ValueError:
+                    break
+                j += 1
+            break
+
+    fluence = None
+    for i, line in enumerate(lines):
+        if 'fluence:' in line.lower() and 'chamax' in line.lower():
+            m = re.search(r'fluence:\s*([\d.eE+\-]+)', line)
+            if m:
+                try:
+                    fluence = float(m.group(1))
+                except ValueError:
+                    pass
+            break
+
+    def parse_sputter_block(start_idx, header_check):
+        rows = []
+        total = None
+        j = start_idx
+        while j < len(lines):
+            if 'cpt.' in lines[j] and header_check in lines[j]:
+                j += 1
+                break
+            j += 1
+
+        while j < len(lines):
+            row = lines[j].strip()
+            if not row:
+                break
+            parts = row.split()
+            if not parts:
+                break
+
+            if parts[0].lower() == 'all':
+                try:
+                    total = {
+                        'sputt_coef': float(parts[1]),
+                        'ener_sputt_coef': float(parts[2]),
+                        'mean_energy': float(parts[3]) if len(parts) > 3 else 0.0
+                    }
+                except (ValueError, IndexError):
+                    pass
+                break
+
+            try:
+                cpt = int(parts[0])
+            except ValueError:
+                break
+
+            if 'no' in row.lower() and 'sputtering' in row.lower():
+                rows.append({
+                    'cpt': cpt,
+                    'symbol': components.get(cpt, f'cpt{cpt}'),
+                    'sputt_coef': 0.0,
+                    'ener_sputt_coef': 0.0,
+                    'mean_energy': 0.0,
+                    'escape_depth': 0.0,
+                    'spread': 0.0,
+                    'no_sputtering': True
+                })
+            else:
+                try:
+                    rows.append({
+                        'cpt': cpt,
+                        'symbol': components.get(cpt, f'cpt{cpt}'),
+                        'sputt_coef': float(parts[1]),
+                        'ener_sputt_coef': float(parts[2]),
+                        'mean_energy': float(parts[3]) if len(parts) > 3 else 0.0,
+                        'escape_depth': float(parts[4]) if len(parts) > 4 else 0.0,
+                        'spread': float(parts[5]) if len(parts) > 5 else 0.0,
+                        'no_sputtering': False
+                    })
+                except (ValueError, IndexError):
+                    pass
+            j += 1
+
+        return rows, total
+
+    sputtering = []
+    sputtering_total = None
+    transmission_sputtering = []
+    transmission_total = None
+
+    for k, line in enumerate(lines):
+        if 'SPUTTERING DATA (BACKWARD SPUTTERING)' in line:
+            sputtering, sputtering_total = parse_sputter_block(k + 1, 'sputt.coef.')
+            break
+
+    for k, line in enumerate(lines):
+        if 'TRANSMISSION SPUTTERING DATA' in line:
+            transmission_sputtering, transmission_total = parse_sputter_block(k + 1, 'sputt.tran.coef.')
+            break
+
+    if not sputtering and sputtering_total is None:
+        return None
+
+    return {
+        'filename': filename,
+        'components': components,
+        'projectile': projectile,
+        'fluence': fluence,
+        'sputtering': sputtering,
+        'sputtering_total': sputtering_total,
+        'transmission_sputtering': transmission_sputtering,
+        'transmission_total': transmission_total
+    }
+
+
+def display_sputtering_yields_section(parsed_files):
+    st.markdown("### 💥 Sputtering Yields")
+
+    summary_rows = []
+    all_symbols = set()
+    for pf in parsed_files:
+        for row in pf['sputtering']:
+            if not row.get('no_sputtering'):
+                all_symbols.add(row['symbol'])
+
+    sorted_symbols = sorted(all_symbols)
+
+    for pf in parsed_files:
+        row = {'File': pf['filename']}
+        proj = pf.get('projectile')
+        if proj:
+            row['Projectile'] = proj['symbol']
+            row['Energy (eV)'] = proj['energy_eV']
+        else:
+            row['Projectile'] = '-'
+            row['Energy (eV)'] = float('nan')
+
+        total = pf.get('sputtering_total')
+        row['Total Yield (atoms/ion)'] = total['sputt_coef'] if total else float('nan')
+
+        symbol_yields = {r['symbol']: r['sputt_coef'] for r in pf['sputtering'] if not r.get('no_sputtering')}
+        for sym in sorted_symbols:
+            row[f'Y({sym})'] = symbol_yields.get(sym, 0.0)
+
+        summary_rows.append(row)
+
+    summary_df = pd.DataFrame(summary_rows)
+
+    st.markdown("#### Summary across files")
+    st.dataframe(summary_df, width='stretch', hide_index=True)
+
+    csv_summary = summary_df.to_csv(index=False)
+    st.download_button(
+        label="📥 Download summary as CSV",
+        data=csv_summary,
+        file_name="sputtering_yields_summary.csv",
+        mime="text/csv",
+        key="download_sputter_summary",
+        type="primary"
+    )
+
+    st.markdown("#### Per-file detail")
+    tab_names = [f"📄 {pf['filename']}" for pf in parsed_files]
+    file_tabs = st.tabs(tab_names)
+
+    for tab, pf in zip(file_tabs, parsed_files):
+        with tab:
+            info_cols = st.columns(3)
+            proj = pf.get('projectile')
+            with info_cols[0]:
+                st.metric("Projectile", proj['symbol'] if proj else '-')
+            with info_cols[1]:
+                st.metric("Energy (eV)", f"{proj['energy_eV']:.1f}" if proj else '-')
+            with info_cols[2]:
+                total = pf.get('sputtering_total')
+                st.metric("Total backward yield (atoms/ion)",
+                          f"{total['sputt_coef']:.5f}" if total else '-')
+
+            st.markdown("##### Backward sputtering")
+            back_rows = []
+            for r in pf['sputtering']:
+                if r.get('no_sputtering'):
+                    back_rows.append({
+                        'CPT': r['cpt'],
+                        'Symbol': r['symbol'],
+                        'Yield (atoms/ion)': 0.0,
+                        'Energy yield': 0.0,
+                        'Mean energy (eV)': 0.0,
+                        'Escape depth (Å)': 0.0,
+                        'Spread (Å)': 0.0,
+                        'Note': 'no backward sputtering'
+                    })
+                else:
+                    back_rows.append({
+                        'CPT': r['cpt'],
+                        'Symbol': r['symbol'],
+                        'Yield (atoms/ion)': r['sputt_coef'],
+                        'Energy yield': r['ener_sputt_coef'],
+                        'Mean energy (eV)': r['mean_energy'],
+                        'Escape depth (Å)': r['escape_depth'],
+                        'Spread (Å)': r['spread'],
+                        'Note': ''
+                    })
+            if total:
+                back_rows.append({
+                    'CPT': 'all',
+                    'Symbol': '—',
+                    'Yield (atoms/ion)': total['sputt_coef'],
+                    'Energy yield': total['ener_sputt_coef'],
+                    'Mean energy (eV)': total['mean_energy'],
+                    'Escape depth (Å)': float('nan'),
+                    'Spread (Å)': float('nan'),
+                    'Note': 'total'
+                })
+            back_df = pd.DataFrame(back_rows)
+            st.dataframe(back_df, width='stretch', hide_index=True)
+
+            csv_back = back_df.to_csv(index=False)
+            st.download_button(
+                label="📥 Download backward yields as CSV",
+                data=csv_back,
+                file_name=f"{pf['filename']}_backward_sputtering.csv",
+                mime="text/csv",
+                key=f"download_back_{pf['filename']}",
+                type="primary"
+            )
+
+            if pf['transmission_sputtering'] or pf.get('transmission_total'):
+                st.markdown("##### Transmission sputtering")
+                trans_rows = []
+                for r in pf['transmission_sputtering']:
+                    if r.get('no_sputtering'):
+                        trans_rows.append({
+                            'CPT': r['cpt'],
+                            'Symbol': r['symbol'],
+                            'Yield (atoms/ion)': 0.0,
+                            'Energy yield': 0.0,
+                            'Mean energy (eV)': 0.0,
+                            'Note': 'no transmission sputtering'
+                        })
+                    else:
+                        trans_rows.append({
+                            'CPT': r['cpt'],
+                            'Symbol': r['symbol'],
+                            'Yield (atoms/ion)': r['sputt_coef'],
+                            'Energy yield': r['ener_sputt_coef'],
+                            'Mean energy (eV)': r['mean_energy'],
+                            'Note': ''
+                        })
+                trans_total = pf.get('transmission_total')
+                if trans_total:
+                    trans_rows.append({
+                        'CPT': 'all',
+                        'Symbol': '—',
+                        'Yield (atoms/ion)': trans_total['sputt_coef'],
+                        'Energy yield': trans_total['ener_sputt_coef'],
+                        'Mean energy (eV)': trans_total['mean_energy'],
+                        'Note': 'total'
+                    })
+                trans_df = pd.DataFrame(trans_rows)
+                st.dataframe(trans_df, width='stretch', hide_index=True)
+
+            if pf.get('components'):
+                with st.expander("ℹ️ Component legend", expanded=False):
+                    comp_df = pd.DataFrame(
+                        [{'CPT': c, 'Symbol': s} for c, s in sorted(pf['components'].items())]
+                    )
+                    st.dataframe(comp_df, width='stretch', hide_index=True)
+
+
 def parse_static_damage_file(file_content, filename):
     css = '''
         <style>
@@ -361,6 +670,37 @@ def create_static_mode_interface():
                     st.sidebar.success(f"✅ {exp_file.name}: {exp_info}")
                 else:
                     st.sidebar.error(f"❌ {exp_file.name}: {exp_info}")
+
+        st.sidebar.markdown("---")
+        st.sidebar.subheader("💥 Sputtering Yields (output.dat)")
+        uploaded_sputter_files = st.sidebar.file_uploader(
+            "Upload SDTrimSP output.dat files",
+            type=['dat', 'txt', 'out'],
+            accept_multiple_files=True,
+            key="static_sputter_files",
+            help="Upload SDTrimSP main output files to extract backward sputtering yields"
+        )
+
+        sputter_parsed = []
+        if uploaded_sputter_files:
+            for sf in uploaded_sputter_files:
+                sf_content = str(sf.read(), "utf-8")
+                parsed = parse_sdtrimsp_output_file(sf_content, sf.name)
+                if parsed is not None:
+                    sputter_parsed.append(parsed)
+                    total = parsed.get('sputtering_total')
+                    if total:
+                        st.sidebar.success(
+                            f"✅ {sf.name}: total Y = {total['sputt_coef']:.4g}"
+                        )
+                    else:
+                        st.sidebar.success(f"✅ {sf.name}: parsed")
+                else:
+                    st.sidebar.error(f"❌ {sf.name}: no sputtering data found")
+
+        if sputter_parsed:
+            display_sputtering_yields_section(sputter_parsed)
+            st.markdown("---")
 
         all_file_data = []
         if uploaded_static_files:
@@ -832,7 +1172,8 @@ def create_static_mode_interface():
                 elif not all_file_data and not experimental_data:
                     st.info("👈 Upload simulation files or experimental data to start plotting")
         else:
-            st.info("👈 Upload simulation files and/or experimental data in the sidebar to begin")
+            if not sputter_parsed:
+                st.info("👈 Upload simulation files and/or experimental data in the sidebar to begin")
 
         return True
 
