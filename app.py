@@ -1028,9 +1028,9 @@ def main():
             font-weight: 600;
         ">
             <span style="color:#2563eb; font-weight:800;">Release:</span>
-            v0.5 &nbsp; | &nbsp;
+            v0.6 &nbsp; | &nbsp;
             <span style="color:#2563eb; font-weight:800;">Updated:</span>
-            May 6, 2026
+            May 28, 2026
         </div>
         """,
         unsafe_allow_html=True
