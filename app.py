@@ -933,6 +933,10 @@ def parse_sdtrimsp_file(file_content):
                     depth = float(parts[0])
                     density = float(parts[1])
 
+                    if depth == 0.0 and density == 0.0:
+                        i += 1
+                        continue
+
                     element_fractions = {}
                     element_concentrations = {}
                     element_densities = {}
@@ -1142,17 +1146,43 @@ def main():
         ---
 
         #### 📊 What You Can Do:
+
+        **📊 Dynamic SDTrimSP mode** (fluence-dependent depth profiles)
         - 📈 **Select and plot** depth concentration distributions:
           - in **atomic fraction**
-          - or in **atoms/cm³**
-        - 🧪 Plot **target density** vs. fluence
+          - in **atoms/cm³**
+          - or in **density (atoms/Å²)**
+        - 🧪 Plot **target density** vs. depth and vs. fluence
         - 📉 **Compare multiple fluences** in a single plot
         - 🔄 Upload **two-column data** (e.g., experimental profiles) for **direct comparison**
-        - 📌 Automatically calculate:
+        - 🪶 Optional **Gaussian smoothing** of profiles
+        - 📌 Automatically calculate, as a function of fluence:
           - **Maximum concentration values**
           - **Depth positions of maxima**
-          - **FWHM (Full Width at Half Maximum)** as a function of fluence
-        - 💾 **Download profiles** for further analysis
+          - **FWHM (Full Width at Half Maximum)**
+        - 💾 **Download profiles** as .xy files (single fluence or batch ZIP of all fluences)
+
+        **📊 Static SDTrimSP mode** (`depth_damage.dat`, `depth_proj.dat`, `output.dat`)
+        - 📈 Plot **STOPS** and **VACANCIES** depth distributions per element from multiple files in one figure, as:
+          - raw counts, atomic fractions, **normalized probability**, density (ions/Å), or concentration (ions/cm³, given a fluence)
+        - 🔬 Choose smoothing (**Savitzky–Golay / Moving average / Gaussian**) with adjustable window and order
+        - 🔄 Overlay **experimental 2-column data** for comparison
+        - 💥 Upload one or more **SDTrimSP `output.dat`** files to extract **backward and transmission sputtering yields**:
+          - Cross-file **summary table** (projectile, energy, total Y, per-element Y)
+          - Per-file detailed tables with **mean energy, escape depth, and spread**
+          - CSV download for both summary and per-file tables
+
+        **🧮 Atomic Density Calculator**
+        - Compute atomic densities (at/Å³) for elements and compounds, with a built-in materials database
+
+        **🔄 Concentration Converter**
+        - Convert between **at.%**, **wt.%**, and **atoms/cm³** for arbitrary multi-component compositions
+
+        **🔄 POSCAR / CIF ↔ SDTrimSP crystal structure converter**
+        - **POSCAR / CIF → SDTrimSP**: generate `crystal.inp` (≤ 7.01) or `table.crystal` entries (≥ 7.02), including the `Nr-crystal` structure block and the geometry-line columns (`dx`, `dy`, `dz`, density, `matrix_id`, …)
+        - **SDTrimSP → POSCAR / CIF**: paste a `table.crystal` entry or upload a `crystal.inp` and download the reconstructed **POSCAR** and **CIF**
+        - Automatic handling of **non-orthogonal lattices** (minimal bounding box + de-duplication) with explicit warnings from the SDTrimSP documentation
+        - Optional **lattice reorientation** (axis re-mapping with sign flips)
 
         ---
 
