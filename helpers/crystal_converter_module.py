@@ -1,6 +1,7 @@
 import streamlit as st
 import numpy as np
 import io
+import re
 
 
 def _format_poscar(crystal_name, v1, v2, v3, elements, frac_positions, elem_indices):
@@ -244,8 +245,399 @@ def _format_table_geometry(crystal_name, dx, dy, dz, n_atoms,
     )
 
 
+def _clean_element_symbol(label):
+    if not label:
+        return label
+    m = re.match(r'^([A-Z][a-z]?)', label)
+    return m.group(1) if m else label
+
+
+def _parse_table_crystal_structure_block(text):
+    raw_lines = [l for l in text.split('\n') if l.strip()]
+    if not raw_lines:
+        return None
+
+    first = raw_lines[0]
+    if '!' in first:
+        first = first.split('!', 1)[0]
+    parts = first.split()
+    if len(parts) < 3:
+        return None
+    try:
+        nr_crystal = int(parts[0])
+        n_atoms = int(parts[1])
+    except ValueError:
+        return None
+    crystal_label = ' '.join(parts[2:]).strip()
+
+    frac_positions = []
+    elem_labels = []
+    for line in raw_lines[1:]:
+        if '!' in line:
+            segs = line.split('!')
+            data_part = segs[0]
+            element_label = None
+            for piece in reversed(segs[1:]):
+                p = piece.strip()
+                if not p:
+                    continue
+                lower = p.lower()
+                if p.startswith('<-') or 'boundary' in lower or 'mirror' in lower:
+                    continue
+                if 'coordinate' in lower or 'relative' in lower or 'atom' in lower:
+                    continue
+                first_word = p.split()[0]
+                if first_word and first_word[0].isalpha():
+                    element_label = first_word
+                    break
+        else:
+            data_part = line
+            element_label = None
+
+        toks = data_part.split()
+        if len(toks) < 3:
+            continue
+        try:
+            x = float(toks[0])
+            y = float(toks[1])
+            z = float(toks[2])
+        except ValueError:
+            continue
+        frac_positions.append([x, y, z])
+        elem_labels.append(element_label)
+        if len(frac_positions) >= n_atoms:
+            break
+
+    return {
+        'nr_crystal': nr_crystal,
+        'n_atoms_declared': n_atoms,
+        'crystal_label': crystal_label,
+        'frac_positions': frac_positions,
+        'elem_labels': elem_labels,
+    }
+
+
+def _parse_table_crystal_geometry_line(text):
+    line = text.strip()
+    if not line:
+        return None
+    if '!' in line:
+        line = line.split('!', 1)[0]
+    toks = line.split()
+    if len(toks) < 8:
+        return None
+    try:
+        name = toks[0]
+        dx = float(toks[1])
+        dy = float(toks[2])
+        dz = float(toks[3])
+        density = float(toks[4])
+        delta_hf = float(toks[5])
+        p_max = float(toks[6])
+        matrix_id = int(toks[7])
+    except (ValueError, IndexError):
+        return None
+
+    crystal_type = None
+    n_elem_types = None
+    n_atoms = None
+    if len(toks) > 8:
+        try:
+            crystal_type = int(toks[8])
+        except ValueError:
+            pass
+    if len(toks) > 9:
+        try:
+            n_elem_types = int(toks[9])
+        except ValueError:
+            pass
+    if len(toks) > 10:
+        try:
+            n_atoms = int(toks[10])
+        except ValueError:
+            pass
+
+    elem_list = []
+    if n_atoms and len(toks) > 11:
+        elem_list = toks[11:11 + n_atoms]
+    elif len(toks) > 11:
+        elem_list = toks[11:]
+
+    return {
+        'name': name,
+        'dx': dx, 'dy': dy, 'dz': dz,
+        'density': density,
+        'delta_hf': delta_hf,
+        'p_max': p_max,
+        'matrix_id': matrix_id,
+        'crystal_type': crystal_type,
+        'n_elem_types': n_elem_types,
+        'n_atoms': n_atoms,
+        'elem_list': elem_list,
+    }
+
+
+def _build_cif_from_orthogonal(crystal_name, dx, dy, dz, species_per_atom, frac_positions):
+    try:
+        from pymatgen.core import Structure, Lattice
+        from pymatgen.io.cif import CifWriter
+    except ImportError:
+        return None, "pymatgen is required to write CIF (pip install pymatgen)"
+    try:
+        lattice = Lattice.from_parameters(dx, dy, dz, 90, 90, 90)
+        structure = Structure(lattice, species_per_atom, frac_positions)
+        return str(CifWriter(structure)), None
+    except Exception as e:
+        return None, str(e)
+
+
+def _build_cif_from_lattice(crystal_name, v1, v2, v3, species_per_atom, frac_positions):
+    try:
+        from pymatgen.core import Structure, Lattice
+        from pymatgen.io.cif import CifWriter
+    except ImportError:
+        return None, "pymatgen is required to write CIF (pip install pymatgen)"
+    try:
+        lattice = Lattice([v1, v2, v3])
+        structure = Structure(lattice, species_per_atom, frac_positions)
+        return str(CifWriter(structure)), None
+    except Exception as e:
+        return None, str(e)
+
+
+def _present_poscar_cif_outputs(crystal_name, v1, v2, v3, elements, counts,
+                                 frac_positions, elem_indices, cif_str, key_prefix):
+    poscar_str = _format_poscar(
+        crystal_name, v1, v2, v3, elements, frac_positions, elem_indices
+    )
+    col_a, col_b = st.columns(2)
+    with col_a:
+        st.markdown("**POSCAR**")
+        st.text_area("POSCAR preview:", poscar_str, height=320, key=f"{key_prefix}_poscar_prev")
+        st.download_button(
+            "⬇️ Download POSCAR",
+            data=poscar_str,
+            file_name=f"{crystal_name}_POSCAR",
+            mime="text/plain",
+            type="primary",
+            key=f"{key_prefix}_dl_poscar",
+        )
+    with col_b:
+        st.markdown("**CIF**")
+        if cif_str:
+            st.text_area("CIF preview:", cif_str, height=320, key=f"{key_prefix}_cif_prev")
+            st.download_button(
+                "⬇️ Download CIF",
+                data=cif_str,
+                file_name=f"{crystal_name}.cif",
+                mime="chemical/x-cif",
+                type="primary",
+                key=f"{key_prefix}_dl_cif",
+            )
+        else:
+            st.warning("CIF could not be generated (pymatgen unavailable or invalid elements).")
+
+
+def _sdtrimsp_to_poscar_cif_interface():
+    st.markdown("#### Convert SDTrimSP crystal data back to POSCAR / CIF")
+    st.caption(
+        "Either paste the two `table.crystal` entries (structure block + geometry line) "
+        "or upload a `crystal.inp` file."
+    )
+
+    source = st.radio(
+        "Input format:",
+        ["table.crystal entries (SDTrimSP ≥ 7.02)", "crystal.inp file (SDTrimSP ≤ 7.01)"],
+        horizontal=True,
+        key="reverse_input_source",
+    )
+
+    if source.startswith("table.crystal"):
+        st.markdown(
+            "Paste **Part 1** (structure block) and **Part 2** (geometry line) "
+            "exactly as they appear in `table.crystal`."
+        )
+        col_in1, col_in2 = st.columns(2)
+        with col_in1:
+            st.markdown("**Part 1 — structure block (fractional coords)**")
+            part1_text = st.text_area(
+                "Structure block:",
+                height=280,
+                key="reverse_part1_text",
+                placeholder=(
+                    "  5  8 TiNb39                  !Nr-crystal, number-of-atoms, name\n"
+                    "    0.0000    0.0000    0.0000  !relative coordinates x y z of atoms        ! Ti\n"
+                    "    0.5000    0.3750    0.2500                                              ! Ti\n"
+                    "    ...\n"
+                ),
+            )
+        with col_in2:
+            st.markdown("**Part 2 — geometry line (dx, dy, dz, …)**")
+            part2_text = st.text_area(
+                "Geometry line:",
+                height=280,
+                key="reverse_part2_text",
+                placeholder=(
+                    "  TiNb39          3.306500   6.613000   6.613000   0.05533    0.0000   "
+                    "3.0000      3       5       2       8     Ti   Nb   ...\n"
+                ),
+            )
+
+        if not (part1_text.strip() and part2_text.strip()):
+            st.info("Paste both Part 1 and Part 2 to begin.")
+            return
+
+        part1 = _parse_table_crystal_structure_block(part1_text)
+        if part1 is None:
+            st.error("Could not parse the structure block. Check the first line format.")
+            return
+        part2 = _parse_table_crystal_geometry_line(part2_text)
+        if part2 is None:
+            st.error("Could not parse the geometry line. Need at least 8 whitespace-separated tokens.")
+            return
+
+        n_parsed = len(part1['frac_positions'])
+        if part2.get('n_atoms') and n_parsed != part2['n_atoms']:
+            st.warning(
+                f"Atom count mismatch: structure block has {n_parsed} positions, "
+                f"geometry line declares {part2['n_atoms']}. Using parsed positions."
+            )
+
+        elem_per_atom_raw = []
+        for i, label in enumerate(part1['elem_labels']):
+            if label:
+                elem_per_atom_raw.append(label)
+            elif part2.get('elem_list') and i < len(part2['elem_list']):
+                elem_per_atom_raw.append(part2['elem_list'][i])
+            else:
+                elem_per_atom_raw.append('X')
+
+        st.markdown("##### Element labels")
+        st.caption(
+            "SDTrimSP labels (e.g. `Ti_1`) are mapped to chemical symbols (e.g. `Ti`). "
+            "Edit below if needed."
+        )
+        clean_default = ", ".join(_clean_element_symbol(e) for e in elem_per_atom_raw)
+        clean_input = st.text_input(
+            "Per-atom element symbols (comma-separated, one per atom):",
+            value=clean_default,
+            key="reverse_clean_elems",
+        )
+        chem_per_atom = [e.strip() for e in clean_input.split(',') if e.strip()]
+        if len(chem_per_atom) != n_parsed:
+            st.error(
+                f"You provided {len(chem_per_atom)} symbols but parsed {n_parsed} atoms. "
+                "Fix the list above before continuing."
+            )
+            return
+
+        seen = {}
+        for e in chem_per_atom:
+            if e not in seen:
+                seen[e] = len(seen)
+        elements = list(seen.keys())
+        elem_indices = [seen[e] + 1 for e in chem_per_atom]
+        counts = [chem_per_atom.count(e) for e in elements]
+
+        dx, dy, dz = part2['dx'], part2['dy'], part2['dz']
+        crystal_name = part2.get('name') or part1.get('crystal_label') or 'crystal'
+        v1 = [dx, 0.0, 0.0]
+        v2 = [0.0, dy, 0.0]
+        v3 = [0.0, 0.0, dz]
+
+        with st.expander("Reconstructed structure summary", expanded=True):
+            c1, c2, c3 = st.columns(3)
+            c1.metric("dx (Å)", f"{dx:.6f}")
+            c2.metric("dy (Å)", f"{dy:.6f}")
+            c3.metric("dz (Å)", f"{dz:.6f}")
+            c1.metric("# atoms", n_parsed)
+            c2.metric("# elements", len(elements))
+            c3.metric("Density (at/Å³)", f"{_atomic_density(dx, dy, dz, n_parsed):.5f}")
+            st.code(
+                f"Crystal label    : {crystal_name}\n"
+                f"Unique elements  : {', '.join(elements)}\n"
+                f"Counts           : {', '.join(str(c) for c in counts)}\n"
+                f"Per-atom symbols : {' '.join(chem_per_atom)}"
+            )
+
+        cif_str, cif_err = _build_cif_from_orthogonal(
+            crystal_name, dx, dy, dz, chem_per_atom, part1['frac_positions']
+        )
+        if cif_err and cif_str is None:
+            st.warning(f"CIF generation failed: {cif_err}")
+
+        _present_poscar_cif_outputs(
+            crystal_name, v1, v2, v3, elements, counts,
+            part1['frac_positions'], elem_indices, cif_str, "reverse_table",
+        )
+        return
+
+    crystal_inp_file = st.file_uploader(
+        "Upload crystal.inp",
+        key="reverse_crystal_inp_file",
+    )
+    if crystal_inp_file is None:
+        st.info("Upload a crystal.inp file to begin.")
+        return
+
+    try:
+        text = crystal_inp_file.read().decode("utf-8")
+        crystal_name, v1, v2, v3, elements, counts, positions = _parse_crystal_inp(
+            text.strip().split('\n')
+        )
+    except Exception as e:
+        st.error(f"Could not parse crystal.inp: {e}")
+        return
+
+    frac_positions = [p[:3] for p in positions]
+    elem_indices = [p[3] for p in positions]
+    dx = float(np.linalg.norm(v1))
+    dy = float(np.linalg.norm(v2))
+    dz = float(np.linalg.norm(v3))
+    ortho = _is_orthogonal(v1, v2, v3)
+
+    clean_elements = [_clean_element_symbol(e) for e in elements]
+    species_per_atom = [clean_elements[ei - 1] for ei in elem_indices]
+
+    with st.expander("Reconstructed structure summary", expanded=True):
+        c1, c2, c3 = st.columns(3)
+        c1.metric("|a| (Å)", f"{dx:.6f}")
+        c2.metric("|b| (Å)", f"{dy:.6f}")
+        c3.metric("|c| (Å)", f"{dz:.6f}")
+        c1.metric("# atoms", len(positions))
+        c2.metric("# elements", len(elements))
+        c3.metric("Orthogonal", "yes" if ortho else "no")
+        st.code(
+            f"Crystal name    : {crystal_name}\n"
+            f"Raw labels      : {', '.join(elements)}\n"
+            f"Clean symbols   : {', '.join(clean_elements)}\n"
+            f"Counts          : {', '.join(str(c) for c in counts)}"
+        )
+
+    cif_str, cif_err = _build_cif_from_lattice(
+        crystal_name, v1, v2, v3, species_per_atom, frac_positions
+    )
+    if cif_err and cif_str is None:
+        st.warning(f"CIF generation failed: {cif_err}")
+
+    _present_poscar_cif_outputs(
+        crystal_name, v1, v2, v3, clean_elements, counts,
+        frac_positions, elem_indices, cif_str, "reverse_inp",
+    )
+
+
 def crystal_converter_interface():
     st.markdown("### Crystal Structure File Converter")
+
+    direction = st.radio(
+        "**Conversion direction:**",
+        ["POSCAR / CIF → SDTrimSP", "SDTrimSP → POSCAR / CIF"],
+        horizontal=True,
+        key="crystal_conv_direction",
+    )
+    if direction.startswith("SDTrimSP →"):
+        _sdtrimsp_to_poscar_cif_interface()
+        return
 
     version = st.radio(
         "**SDTrimSP version:**",
