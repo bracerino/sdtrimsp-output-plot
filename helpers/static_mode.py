@@ -661,15 +661,21 @@ def create_static_mode_interface():
         )
 
         experimental_data = []
+        exp_success_lines = []
+        exp_error_lines = []
         if uploaded_exp_files:
             for exp_file in uploaded_exp_files:
                 exp_content = str(exp_file.read(), "utf-8")
                 exp_df, exp_info = parse_experimental_data(exp_content, exp_file.name)
                 if exp_df is not None:
                     experimental_data.append((exp_file.name, exp_df, exp_info))
-                    st.sidebar.success(f"✅ {exp_file.name}: {exp_info}")
+                    exp_success_lines.append(f"✅ **{exp_file.name}** — {exp_info}")
                 else:
-                    st.sidebar.error(f"❌ {exp_file.name}: {exp_info}")
+                    exp_error_lines.append(f"❌ **{exp_file.name}** — {exp_info}")
+            if exp_success_lines:
+                st.sidebar.success("\n\n".join(exp_success_lines))
+            if exp_error_lines:
+                st.sidebar.error("\n\n".join(exp_error_lines))
 
         st.sidebar.markdown("---")
         st.sidebar.subheader("💥 Sputtering Yields (output.dat)")
@@ -682,6 +688,8 @@ def create_static_mode_interface():
         )
 
         sputter_parsed = []
+        sputter_success_lines = []
+        sputter_error_lines = []
         if uploaded_sputter_files:
             for sf in uploaded_sputter_files:
                 sf_content = str(sf.read(), "utf-8")
@@ -690,19 +698,25 @@ def create_static_mode_interface():
                     sputter_parsed.append(parsed)
                     total = parsed.get('sputtering_total')
                     if total:
-                        st.sidebar.success(
-                            f"✅ {sf.name}: total Y = {total['sputt_coef']:.4g}"
+                        sputter_success_lines.append(
+                            f"✅ **{sf.name}** — total Y = {total['sputt_coef']:.4g}"
                         )
                     else:
-                        st.sidebar.success(f"✅ {sf.name}: parsed")
+                        sputter_success_lines.append(f"✅ **{sf.name}** — parsed")
                 else:
-                    st.sidebar.error(f"❌ {sf.name}: no sputtering data found")
+                    sputter_error_lines.append(f"❌ **{sf.name}** — no sputtering data found")
+            if sputter_success_lines:
+                st.sidebar.success("\n\n".join(sputter_success_lines))
+            if sputter_error_lines:
+                st.sidebar.error("\n\n".join(sputter_error_lines))
 
         if sputter_parsed:
             display_sputtering_yields_section(sputter_parsed)
             st.markdown("---")
 
         all_file_data = []
+        depth_info_lines = []
+        depth_error_lines = []
         if uploaded_static_files:
             for uploaded_file in uploaded_static_files:
                 file_content = str(uploaded_file.read(), "utf-8")
@@ -715,14 +729,24 @@ def create_static_mode_interface():
                     })
 
                     sample_element = list(elements_data.keys())[0]
+                    bin_str = "n/a"
                     if len(elements_data[sample_element]['data']) > 1:
                         depths = [p['depth'] for p in elements_data[sample_element]['data']]
                         depths.sort()
                         spacings = [depths[i + 1] - depths[i] for i in range(len(depths) - 1)]
                         avg_spacing = sum(spacings) / len(spacings)
-                        st.sidebar.info(f"📏 Detected bin width: {avg_spacing:.2f} Å")
+                        bin_str = f"{avg_spacing:.2f} Å"
+                    depth_info_lines.append(
+                        f"✅ **{uploaded_file.name}** — 📏 bin width: {bin_str}"
+                    )
                 else:
-                    st.error(f"❌ {uploaded_file.name}: No valid data found")
+                    depth_error_lines.append(
+                        f"❌ **{uploaded_file.name}** — no valid data found"
+                    )
+            if depth_info_lines:
+                st.sidebar.info("\n\n".join(depth_info_lines))
+            if depth_error_lines:
+                st.sidebar.error("\n\n".join(depth_error_lines))
 
         if all_file_data or experimental_data:
             col_settings1, col_settings2 = st.columns(2)
