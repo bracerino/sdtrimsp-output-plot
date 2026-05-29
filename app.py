@@ -1009,6 +1009,386 @@ def parse_sdtrimsp_file(file_content):
     return fluence_data, debug_info
 
 
+def parse_dynamic_sputter_yields(file_content):
+    """Parse sputtering yields vs fluence from an SDTrimSP dynamic run log.
+
+    The main SDTrimSP output log prints one line per history step that looks like:
+        50 flc:  10.0 E: 0. a: 0.0 dz: -37.56 dz/dt 0.0 Ysum:  0.15 0.04 0.07 0.04 0.16 qumax  ...
+    where the numbers after 'Ysum:' are the per-component sputtering yields and 'flc:'
+    is the accumulated fluence (in ions/A**2).
+
+    Components that belong to the same chemical element (e.g. 'Ti' and 'Ti_1') are
+    combined using the 'correspond. element' mapping from the crystal table header,
+    falling back to stripping a '_<n>' suffix when that mapping is unavailable.
+    """
+    lines = file_content.split('\n')
+
+    symbols = []
+    correspond = []
+    for line in lines:
+        s = line.strip()
+        if not symbols and s.startswith('symbol') and ':' in s:
+            symbols = s.split(':', 1)[1].split()
+        elif s.startswith('correspond. element') and ':' in s:
+            try:
+                correspond = [int(x) for x in s.split(':', 1)[1].split()]
+            except ValueError:
+                correspond = []
+        if symbols and correspond:
+            break
+
+    fluences = []
+    yields_rows = []
+    for line in lines:
+        if 'flc:' in line and 'Ysum:' in line:
+            mflc = re.search(r'flc:\s*([-+0-9.eE]+)', line)
+            mys = re.search(r'Ysum:\s*(.*?)(?:qumax|$)', line)
+            if not mflc or not mys:
+                continue
+            try:
+                flc = float(mflc.group(1))
+            except ValueError:
+                continue
+            yvals = []
+            for tok in mys.group(1).split():
+                try:
+                    yvals.append(float(tok))
+                except ValueError:
+                    pass
+            if not yvals:
+                continue
+            fluences.append(flc)
+            yields_rows.append(yvals)
+
+    if not fluences:
+        return None
+
+    n_comp = max(len(r) for r in yields_rows)
+
+    if not symbols or len(symbols) != n_comp:
+        symbols = [f'comp{i + 1}' for i in range(n_comp)]
+        correspond = []
+
+    if correspond and len(correspond) == len(symbols):
+        group_for = []
+        for ci in correspond:
+            if 1 <= ci <= len(symbols):
+                group_for.append(symbols[ci - 1])
+            else:
+                group_for.append(re.sub(r'_\d+$', '', symbols[len(group_for)]))
+    else:
+        group_for = [re.sub(r'_\d+$', '', s) for s in symbols]
+
+    n_steps = len(fluences)
+    per_symbol = {s: [0.0] * n_steps for s in symbols}
+    for step, row in enumerate(yields_rows):
+        for i in range(min(len(row), n_comp)):
+            per_symbol[symbols[i]][step] = row[i]
+
+    group_order = []
+    group_members = {}
+    group_yields = {}
+    for i, s in enumerate(symbols):
+        g = group_for[i]
+        if g not in group_yields:
+            group_yields[g] = [0.0] * n_steps
+            group_members[g] = []
+            group_order.append(g)
+        group_members[g].append(s)
+        for step in range(n_steps):
+            group_yields[g][step] += per_symbol[s][step]
+
+    total = [sum(row[i] for i in range(min(len(row), n_comp))) for row in yields_rows]
+
+    return {
+        'symbols': symbols,
+        'group_order': group_order,
+        'group_members': group_members,
+        'group_yields': group_yields,
+        'per_symbol': per_symbol,
+        'fluences': fluences,
+        'total': total,
+    }
+
+
+def display_dynamic_sputter_yields_section():
+    """Uploader + chart for sputtering yields vs fluence from a dynamic run log."""
+    st.markdown("### 💥 Sputtering Yields vs Fluence")
+    st.caption(
+        "Upload (or paste) the main SDTrimSP run log (the file with the per-step `flc: ... Ysum: ...` lines). "
+        "Components of the same element (e.g. Ti and Ti_1) are summed; the total yield sums all components."
+    )
+
+    ups = st.file_uploader(
+        "Choose SDTrimSP dynamic output log(s) (with 'Ysum:' lines)",
+        type=['dat', 'txt', 'out', 'log'],
+        accept_multiple_files=True,
+        key="dynamic_sputter_log",
+        help="Upload one or more run logs to compare their sputtering yields in a single graph."
+    )
+
+    # Allow pasting log content directly, in addition to uploading files.
+    if 'dyn_sputter_pasted' not in st.session_state:
+        st.session_state.dyn_sputter_pasted = {}
+
+    with st.expander("➕ Or paste log content directly", expanded=False):
+        paste_name = st.text_input(
+            "Name for this dataset:",
+            value=f"pasted_{len(st.session_state.dyn_sputter_pasted) + 1}",
+            key="dyn_sputter_paste_name"
+        )
+        paste_content = st.text_area(
+            "Paste the run-log text (must contain the per-step `flc: ... Ysum: ...` lines):",
+            height=200,
+            key="dyn_sputter_paste_content"
+        )
+        add_col, clear_col = st.columns([1, 1])
+        with add_col:
+            if st.button("✅ Accept and add", key="dyn_sputter_paste_add", type="primary"):
+                if not paste_content.strip():
+                    st.warning("Nothing to add — the text box is empty.")
+                elif parse_dynamic_sputter_yields(paste_content) is None:
+                    st.error("Could not find any per-step `Ysum:` lines in the pasted text.")
+                else:
+                    name = paste_name.strip() or f"pasted_{len(st.session_state.dyn_sputter_pasted) + 1}"
+                    st.session_state.dyn_sputter_pasted[name] = paste_content
+                    st.success(f"Added '{name}'.")
+        with clear_col:
+            if st.session_state.dyn_sputter_pasted and st.button(
+                "🗑️ Clear pasted datasets", key="dyn_sputter_paste_clear"
+            ):
+                st.session_state.dyn_sputter_pasted = {}
+                st.rerun()
+
+        if st.session_state.dyn_sputter_pasted:
+            st.caption("Pasted datasets: " + ", ".join(st.session_state.dyn_sputter_pasted.keys()))
+
+    if not ups and not st.session_state.dyn_sputter_pasted:
+        return
+
+    parsed_files = {}
+    failed = []
+    for up in ups:
+        content = str(up.read(), "utf-8")
+        p = parse_dynamic_sputter_yields(content)
+        if p is None:
+            failed.append(up.name)
+        else:
+            parsed_files[up.name] = p
+
+    for name, content in st.session_state.dyn_sputter_pasted.items():
+        p = parse_dynamic_sputter_yields(content)
+        if p is None:
+            failed.append(name)
+        else:
+            parsed_files[name] = p
+
+    if failed:
+        st.warning("No per-step `Ysum:` lines found in: " + ", ".join(failed))
+
+    if not parsed_files:
+        st.error("Could not find any per-step `Ysum:` sputtering-yield lines in the uploaded/pasted data.")
+        return
+
+    multi = len(parsed_files) > 1
+
+    # Build the list of selectable series across all files: grouped elements,
+    # individual components, and the total — each tagged with its source file.
+    options = []
+    option_map = {}
+    default_options = []
+    for fname, p in parsed_files.items():
+        for g in p['group_order']:
+            members = p['group_members'][g]
+            ylabel = f"Y({g})" if members == [g] else f"Y({g}={'+'.join(members)})"
+            opt = f"{fname} | {ylabel}"
+            options.append(opt)
+            option_map[opt] = (fname, 'group', g)
+            if not multi:
+                default_options.append(opt)
+        for s in p['symbols']:
+            opt = f"{fname} | Y[{s}] (component)"
+            options.append(opt)
+            option_map[opt] = (fname, 'component', s)
+        opt_total = f"{fname} | Total"
+        options.append(opt_total)
+        option_map[opt_total] = (fname, 'total', None)
+        default_options.append(opt_total)
+
+    selected = st.multiselect(
+        "Select which yields to plot (compare across files):",
+        options,
+        default=default_options,
+        key="dyn_sputter_series"
+    )
+
+    # Fluence-unit conversions, relative to the parsed value in atoms/Å².
+    # 1 atom/Å² = 1e16 atoms/cm² = 0.1 × 10¹⁷ atoms/cm².
+    flu_unit_factors = {
+        "atoms/Ų": 1.0,
+        "atoms/cm²": 1e16,
+        "10¹⁷ atoms/cm²": 0.1,
+    }
+    flu_unit_labels = {
+        "atoms/Ų": "Fluence (atoms/Ų)",
+        "atoms/cm²": "Fluence (atoms/cm²)",
+        "10¹⁷ atoms/cm²": "Fluence (10¹⁷ atoms/cm²)",
+    }
+
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        flu_unit = st.radio(
+            "Fluence Units:", list(flu_unit_factors.keys()), key="dyn_sputter_flu_unit"
+        )
+    with col2:
+        y_scale = st.radio("Y-axis Scale:", ["Linear", "Logarithmic"], key="dyn_sputter_yscale")
+    with col3:
+        plot_style = st.radio("Plot Style:", ["Lines", "Markers", "Lines+Markers"], key="dyn_sputter_style")
+
+    x_label = flu_unit_labels[flu_unit]
+    x_factor = flu_unit_factors[flu_unit]
+
+    mode_map = {"Lines": "lines", "Markers": "markers", "Lines+Markers": "lines+markers"}
+    plot_mode = mode_map[plot_style]
+
+    # Line / marker styling controls (shown depending on the selected plot style).
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("💥 Sputter Plot Styling")
+    uses_lines = plot_style in ("Lines", "Lines+Markers")
+    uses_markers = plot_style in ("Markers", "Lines+Markers")
+
+    if uses_lines:
+        line_width = st.sidebar.slider("Line width:", 1, 10, 3, key="dyn_sputter_line_width")
+        line_style = st.sidebar.selectbox(
+            "Line style:", ["Auto (by role)", "solid", "dash", "dot", "dashdot"],
+            key="dyn_sputter_line_style",
+            help="'Auto (by role)' draws totals dashed, components dotted, elements solid."
+        )
+    else:
+        line_width = 3
+        line_style = "Auto (by role)"
+
+    if uses_markers:
+        marker_size = st.sidebar.slider("Marker size:", 3, 20, 7, key="dyn_sputter_marker_size")
+        marker_symbol = st.sidebar.selectbox(
+            "Marker symbol:",
+            ["circle", "square", "diamond", "triangle-up", "triangle-down", "x", "cross", "star"],
+            key="dyn_sputter_marker_symbol"
+        )
+    else:
+        marker_size = 7
+        marker_symbol = "circle"
+
+    colors = ['blue', 'red', 'green', 'orange', 'purple', 'brown', 'pink', 'cyan', 'magenta', 'lime',
+              'teal', 'olive', 'navy', 'maroon', 'darkgreen']
+
+    if not selected:
+        st.info("👆 Select one or more yields above to plot.")
+        return
+
+    def series_values(fname, kind, key):
+        p = parsed_files[fname]
+        if kind == 'group':
+            return p['group_yields'][key]
+        if kind == 'component':
+            return p['per_symbol'][key]
+        return p['total']
+
+    def series_label(opt, fname, kind, key):
+        if not multi:
+            # drop the redundant filename prefix when only one file is loaded
+            return opt.split(' | ', 1)[1]
+        return opt
+
+    fig = go.Figure()
+    for idx, opt in enumerate(selected):
+        fname, kind, key = option_map[opt]
+        p = parsed_files[fname]
+        x_vals = np.array(p['fluences']) * x_factor
+        y_vals = series_values(fname, kind, key)
+        is_total = (kind == 'total')
+        if line_style == "Auto (by role)":
+            dash = 'dash' if is_total else ('dot' if kind == 'component' else 'solid')
+        else:
+            dash = line_style
+        fig.add_trace(go.Scatter(
+            x=x_vals,
+            y=y_vals,
+            mode=plot_mode,
+            name=series_label(opt, fname, kind, key),
+            line=dict(
+                color=colors[idx % len(colors)],
+                width=line_width + 1 if is_total else line_width,
+                dash=dash
+            ),
+            marker=dict(
+                size=marker_size + 1 if is_total else marker_size,
+                color=colors[idx % len(colors)],
+                symbol=marker_symbol
+            )
+        ))
+
+    fig.update_layout(
+        title=dict(text="Sputtering Yield vs Fluence", font=dict(size=28, color='black')),
+        xaxis_title=dict(text=x_label, font=dict(size=24, color='black')),
+        yaxis_title=dict(text="Sputtering Yield (atoms/ion)", font=dict(size=24, color='black')),
+        yaxis_type="log" if y_scale == "Logarithmic" else "linear",
+        height=650,
+        hovermode='x unified',
+        font=dict(size=20, color='black'),
+        legend=dict(font=dict(size=16, color='black')),
+        xaxis=dict(tickfont=dict(size=20, color='black')),
+        yaxis=dict(tickfont=dict(size=20, color='black'))
+    )
+
+    st.plotly_chart(fig, width='stretch')
+
+    # Final-value summary for the selected series.
+    summary_rows = []
+    for opt in selected:
+        fname, kind, key = option_map[opt]
+        summary_rows.append({
+            'File': fname,
+            'Series': opt.split(' | ', 1)[1],
+            'Final fluence (atoms/Ų)': parsed_files[fname]['fluences'][-1],
+            'Final fluence (10¹⁷ atoms/cm²)': parsed_files[fname]['fluences'][-1] * 0.1,
+            'Final yield (atoms/ion)': series_values(fname, kind, key)[-1]
+        })
+    st.dataframe(pd.DataFrame(summary_rows), width='stretch', hide_index=True)
+
+    # Long-format CSV (robust to files having different fluence grids).
+    long_rows = []
+    for opt in selected:
+        fname, kind, key = option_map[opt]
+        p = parsed_files[fname]
+        label = opt.split(' | ', 1)[1]
+        yv = series_values(fname, kind, key)
+        for f, y in zip(p['fluences'], yv):
+            long_rows.append({
+                'File': fname,
+                'Series': label,
+                'Fluence (atoms/Ų)': f,
+                'Fluence (atoms/cm²)': f * 1e16,
+                'Fluence (10¹⁷ atoms/cm²)': f * 0.1,
+                'Yield (atoms/ion)': y
+            })
+    sputter_df = pd.DataFrame(long_rows)
+
+    with st.expander("📋 Sputtering yield data table", expanded=False):
+        st.dataframe(sputter_df, width='stretch', hide_index=True)
+
+    st.download_button(
+        label="📥 Download selected sputtering yields as CSV",
+        data=sputter_df.to_csv(index=False),
+        file_name="dynamic_sputtering_yields_vs_fluence.csv",
+        mime="text/csv",
+        key="download_dyn_sputter",
+        type="primary"
+    )
+
+    st.markdown("---")
+
+
 def main():
     st.set_page_config(page_title="SDTrimSP Plotter", layout="wide")
 
@@ -1208,8 +1588,10 @@ def main():
 
     uploaded_file = st.file_uploader("Choose SDTrimSP output file")
 
+    display_dynamic_sputter_yields_section()
+
     if uploaded_file is None:
-        st.info("👆 Please upload your Dynamic SDTrimSP output file above.")
+        st.info("👆 Please upload your Dynamic SDTrimSP output file above (or use the sputtering-yield log uploader above).")
         return
 
     if uploaded_file is not None:
