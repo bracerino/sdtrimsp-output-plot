@@ -817,7 +817,7 @@ def create_static_mode_interface():
                             label = st.text_input(
                                 f"Label for plot legend",
                                 value=f"{file_data['filename']} - {selected_element} - {selected_column}",
-                                key=f"label_{file_idx}"
+                                key=f"label_{file_idx}_{selected_element}_{selected_column}"
                             )
 
                             column_key = selected_column.lower()
