@@ -149,12 +149,16 @@ def parse_experimental_data(file_content, filename):
 
 
 def create_single_fluence_plots(df, depth_col, depth_label, plot_type, mode, y_axis_scale, selected_fluence,
-                                element_names, smooth_data, selected_elements, experimental_data=None):
+                                element_names, smooth_data, selected_elements, experimental_data=None,
+                                display_elements=None):
+    # Restrict the per-element curves to the user-selected subset (defaults to all).
+    elements_to_plot = display_elements if display_elements is not None else element_names
+
     if plot_type == "Atomic Fractions":
         fig = go.Figure()
         colors = ['blue', 'red', 'green', 'orange', 'purple', 'brown', 'pink']
 
-        for i, element in enumerate(element_names):
+        for i, element in enumerate(elements_to_plot):
             frac_col = f'{element}_frac_smooth' if smooth_data and f'{element}_frac_smooth' in df.columns else f'{element}_frac'
             if frac_col in df.columns:
                 display_name = f"{element} (smoothed)" if smooth_data and f'{element}_frac_smooth' in df.columns else element
@@ -210,7 +214,7 @@ def create_single_fluence_plots(df, depth_col, depth_label, plot_type, mode, y_a
         fig = go.Figure()
         colors = ['blue', 'red', 'green', 'orange', 'purple', 'brown', 'pink']
 
-        for i, element in enumerate(element_names):
+        for i, element in enumerate(elements_to_plot):
             conc_col = f'{element}_conc_smooth' if smooth_data and f'{element}_conc_smooth' in df.columns else f'{element}_conc'
             if conc_col in df.columns:
                 display_name = f"{element} (smoothed)" if smooth_data and f'{element}_conc_smooth' in df.columns else element
@@ -266,7 +270,7 @@ def create_single_fluence_plots(df, depth_col, depth_label, plot_type, mode, y_a
         fig = go.Figure()
         colors = ['blue', 'red', 'green', 'orange', 'purple', 'brown', 'pink']
 
-        for i, element in enumerate(element_names):
+        for i, element in enumerate(elements_to_plot):
             dens_col = f'{element}_dens_smooth' if smooth_data and f'{element}_dens_smooth' in df.columns else f'{element}_dens'
             if dens_col in df.columns:
                 display_name = f"{element} (smoothed)" if smooth_data and f'{element}_dens_smooth' in df.columns else element
@@ -857,9 +861,18 @@ def parse_sdtrimsp_file(file_content):
             parts = sixth_line.split()
             potential_elements = []
             for part in parts:
-                if not part.replace('.', '').replace('-', '').replace('+', '').replace('E', '').isdigit() and len(
-                        part) <= 3:
-                    potential_elements.append(part.strip())
+                token = part.strip()
+                # Keep any non-numeric token as a component name. Do NOT cap the
+                # length: SDTrimSP component names such as 'Nb_1' or 'Ti_1' are
+                # 4+ characters and were previously discarded, which silently
+                # dropped whole atomic-fraction columns. Those dropped components
+                # are exactly the bulk/matrix species that dominate at depth, so
+                # the plotted fractions no longer summed to 1 and the matrix
+                # profile appeared to "decay" toward 0 instead of its bulk value.
+                cleaned = (token.replace('.', '').replace('-', '').replace('+', '')
+                           .replace('E', '').replace('e', ''))
+                if token and not cleaned.isdigit():
+                    potential_elements.append(token)
 
             if potential_elements:
                 element_counts = {}
@@ -958,7 +971,8 @@ def parse_sdtrimsp_file(file_content):
                     data_entry.update(element_concentrations)
                     data_entry.update(element_densities)
 
-                    n_elements = [elem for elem in element_names if elem.startswith('N')]
+                    n_elements = [elem for elem in element_names
+                                  if re.sub(r'_\d+$', '', elem) == 'N']
                     if len(n_elements) > 1:
                         total_n_frac = sum(element_fractions.get(f'{elem}_frac', 0) for elem in n_elements)
                         total_n_conc = sum(element_concentrations.get(f'{elem}_conc', 0) for elem in n_elements)
@@ -1238,7 +1252,7 @@ def display_dynamic_sputter_yields_section():
     col1, col2, col3 = st.columns(3)
     with col1:
         flu_unit = st.radio(
-            "Fluence Units:", list(flu_unit_factors.keys()), key="dyn_sputter_flu_unit"
+            "Fluence Units:", list(flu_unit_factors.keys()), index=1, key="dyn_sputter_flu_unit"
         )
     with col2:
         y_scale = st.radio("Y-axis Scale:", ["Linear", "Logarithmic"], key="dyn_sputter_yscale")
@@ -1586,15 +1600,22 @@ def main():
     if not show_dynamic:
         return
 
-    uploaded_file = st.file_uploader("Choose SDTrimSP output file")
+    profile_tab, sputter_tab = st.tabs(
+        ["📈 Dynamic Depth Profile", "💥 Sputtering Yields vs Fluence"]
+    )
 
-    display_dynamic_sputter_yields_section()
+    # Render the sputtering-yield tab first so that the early returns in the
+    # depth-profile branch below still leave this tab populated.
+    with sputter_tab:
+        display_dynamic_sputter_yields_section()
 
-    if uploaded_file is None:
-        st.info("👆 Please upload your Dynamic SDTrimSP output file above (or use the sputtering-yield log uploader above).")
-        return
+    with profile_tab:
+        uploaded_file = st.file_uploader("Choose SDTrimSP output file")
 
-    if uploaded_file is not None:
+        if uploaded_file is None:
+            st.info("👆 Please upload your Dynamic SDTrimSP output file above "
+                    "(or open the **💥 Sputtering Yields vs Fluence** tab).")
+            return
         file_content = str(uploaded_file.read(), "utf-8")
 
         try:
@@ -1735,7 +1756,7 @@ def main():
                     default=element_names[1:]
                 )
 
-            fluence_unit = st.sidebar.radio("Fluence Units:", ["atoms/Ų", "atoms/cm²"])
+            fluence_unit = st.sidebar.radio("Fluence Units:", ["atoms/Ų", "atoms/cm²"], index=1)
 
             st.sidebar.subheader("📊 Experimental Data")
             uploaded_exp_files = st.sidebar.file_uploader(
@@ -1755,33 +1776,6 @@ def main():
                         st.sidebar.success(f"✅ {exp_file.name}: {exp_info}")
                     else:
                         st.sidebar.error(f"❌ {exp_file.name}: {exp_info}")
-
-            st.sidebar.subheader("Analysis Mode")
-            col_analysis1, col_analysis2 = st.sidebar.columns(2)
-
-            with col_analysis1:
-                if st.button("📊 Fluence Analysis", type="primary", width='stretch'):
-                    st.session_state.show_analysis = True
-
-            with col_analysis2:
-                if st.button("📈 Profile Plots", type="primary", width='stretch'):
-                    st.session_state.show_analysis = False
-
-            if 'show_analysis' not in st.session_state:
-                st.session_state.show_analysis = False
-
-            current_mode = "Fluence Analysis" if st.session_state.show_analysis else "Profile Plots"
-            st.sidebar.info(f"Current Mode: **{current_mode}**")
-
-            st.sidebar.subheader("Multi-Fluence Comparison")
-            compare_multiple = st.sidebar.checkbox("Compare Multiple Fluences")
-
-            if compare_multiple:
-                selected_fluences = st.sidebar.multiselect(
-                    "Select fluences to compare:",
-                    fluence_values,
-                    default=[fluence_values[0], fluence_values[-1]] if len(fluence_values) > 1 else [fluence_values[0]]
-                )
 
             st.sidebar.subheader("💾 Bulk Download")
             depth_key = 'depth_A' if depth_unit == "Angstroms (Å)" else 'depth_nm'
@@ -1831,19 +1825,40 @@ def main():
 
             mode = 'lines' if plot_style == "Lines" else 'markers' if plot_style == "Points" else 'lines+markers'
 
-            if compare_multiple and len(selected_fluences) > 1:
-                create_multi_fluence_comparison(fluence_data, selected_fluences, depth_col, depth_label, plot_type,
-                                                mode, y_axis_scale, element_names, smooth_data, smooth_sigma,
-                                                selected_elements)
-            elif st.session_state.show_analysis:
+            # Profile views are split into sub-tabs. The single-fluence block is
+            # defined last so the "Data Summary" section below stays attached to it.
+            single_tab, multi_tab, analysis_tab = st.tabs(
+                ["📈 Single Fluence", "📊 Multi-Fluence Comparison", "📌 Fluence Analysis"]
+            )
+
+            with multi_tab:
+                selected_fluences = st.multiselect(
+                    "Select fluences to compare:",
+                    fluence_values,
+                    default=[fluence_values[0], fluence_values[-1]] if len(fluence_values) > 1 else [fluence_values[0]]
+                )
+                if len(selected_fluences) > 1:
+                    create_multi_fluence_comparison(fluence_data, selected_fluences, depth_col, depth_label, plot_type,
+                                                    mode, y_axis_scale, element_names, smooth_data, smooth_sigma,
+                                                    selected_elements)
+                else:
+                    st.info("👆 Select at least two fluences above to show a comparison.")
+
+            with analysis_tab:
                 perform_fluence_analysis(fluence_data, element_names, fluence_unit, selected_elements, smooth_data,
                                          smooth_sigma, plot_type)
-            else:
+
+            with single_tab:
+                plot_elements = st.multiselect(
+                    "Elements to include in the plot:",
+                    element_names,
+                    default=element_names,
+                    key="single_plot_elements"
+                )
                 create_single_fluence_plots(df, depth_col, depth_label, plot_type, mode, y_axis_scale,
                                             selected_fluence, element_names, smooth_data, selected_elements,
-                                            experimental_data)
+                                            experimental_data, display_elements=plot_elements)
 
-            if not compare_multiple:
                 st.subheader("📈 Data Summary")
                 col1, col2, col3 = st.columns(3)
 
