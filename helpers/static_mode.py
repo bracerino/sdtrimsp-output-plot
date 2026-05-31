@@ -426,6 +426,13 @@ def parse_static_damage_file(file_content, filename):
     st.markdown(css, unsafe_allow_html=True)
     lines = file_content.strip().split('\n')
 
+    # Detect the kind of depth-distribution file. Projectile files
+    # (depth_proj.dat) carry only projectile range / energy-loss data and do
+    # NOT contain the per-depth target composition, whereas recoil/damage
+    # files (depth_recoil.dat / depth_damage.dat) list every component.
+    is_projectile = 'DEPTH DISTRIBUTIONS (PROJECTILES)' in file_content
+    file_type = 'projectile' if is_projectile else 'recoil'
+
     elements_data = {}
     current_element = None
     current_data = []
@@ -507,7 +514,7 @@ def parse_static_damage_file(file_content, filename):
             'header': header_columns.copy()
         }
 
-    return elements_data
+    return elements_data, file_type
 
 
 def calculate_processed_data_static(elements_data, column_name, fluence_per_cm2=None):
@@ -607,6 +614,40 @@ def smooth_data(x, y, method='savgol', window=11, poly_order=3, sigma=2.0):
 
     else:
         return y
+
+
+DATA_TYPE_OPTIONS = [
+    "Raw Values",
+    "Atomic Fractions",
+    "Normalized Probability",
+    "Density (ions/Å)",
+    "Concentration (ions/cm³)",
+]
+
+
+def get_supported_data_types(file_type):
+    """Return the 'Data Type to Plot' options that are physically meaningful
+    for a given parsed file type."""
+    if file_type == 'projectile':
+        # depth_proj.dat stores only the projectile depth/energy-loss data,
+        # not the per-depth target composition, so atomic fractions (which need
+        # the number of atoms of every species at each depth) are undefined.
+        return [t for t in DATA_TYPE_OPTIONS if t != "Atomic Fractions"]
+    return list(DATA_TYPE_OPTIONS)
+
+
+def explain_unsupported_data_type(plot_data_type, file_type):
+    if file_type == 'projectile' and plot_data_type == "Atomic Fractions":
+        return (
+            "**Atomic Fractions** require the number of target atoms of each "
+            "species at every depth. Projectile files (`depth_proj.dat`) only "
+            "store the projectile range and energy-loss data (STOPS, PATHLENGTH, "
+            "NUCL./ELECT. LOSS, NUM.COLL., NRT-DPA) — they do **not** contain the "
+            "per-depth target composition, so an atomic fraction cannot be "
+            "computed.\n\nUse **Raw Values**, **Normalized Probability**, "
+            "**Density (ions/Å)** or **Concentration (ions/cm³)** for this file."
+        )
+    return f"“{plot_data_type}” is not available for this file type ({file_type})."
 
 
 def create_static_mode_interface():
@@ -720,12 +761,13 @@ def create_static_mode_interface():
         if uploaded_static_files:
             for uploaded_file in uploaded_static_files:
                 file_content = str(uploaded_file.read(), "utf-8")
-                elements_data = parse_static_damage_file(file_content, uploaded_file.name)
+                elements_data, file_type = parse_static_damage_file(file_content, uploaded_file.name)
 
                 if elements_data:
                     all_file_data.append({
                         'filename': uploaded_file.name,
-                        'elements_data': elements_data
+                        'elements_data': elements_data,
+                        'file_type': file_type
                     })
 
                     sample_element = list(elements_data.keys())[0]
@@ -736,8 +778,9 @@ def create_static_mode_interface():
                         spacings = [depths[i + 1] - depths[i] for i in range(len(depths) - 1)]
                         avg_spacing = sum(spacings) / len(spacings)
                         bin_str = f"{avg_spacing:.2f} Å"
+                    type_label = "projectile (depth_proj)" if file_type == 'projectile' else "recoil/damage"
                     depth_info_lines.append(
-                        f"✅ **{uploaded_file.name}** — 📏 bin width: {bin_str}"
+                        f"✅ **{uploaded_file.name}** — 🗂️ {type_label} — 📏 bin width: {bin_str}"
                     )
                 else:
                     depth_error_lines.append(
@@ -790,6 +833,7 @@ def create_static_mode_interface():
                 for file_idx, (tab, file_data) in enumerate(zip(tabs, all_file_data)):
                     with tab:
                         available_elements = list(file_data['elements_data'].keys())
+                        file_type = file_data.get('file_type', 'recoil')
 
                         col1, col2 = st.columns([1, 1])
 
@@ -803,7 +847,13 @@ def create_static_mode_interface():
 
                         with col2:
                             if selected_element != 'None':
-                                available_columns = ['STOPS', 'VACANCIES']
+                                # Projectile files (depth_proj.dat) have no VACANCIES
+                                # column (their last column is NRT-DPA), so only STOPS
+                                # is offered for them.
+                                if file_type == 'projectile':
+                                    available_columns = ['STOPS']
+                                else:
+                                    available_columns = ['STOPS', 'VACANCIES']
 
                                 selected_column = st.selectbox(
                                     f"Select column to plot",
@@ -834,7 +884,8 @@ def create_static_mode_interface():
                                 'element': selected_element,
                                 'column': selected_column,
                                 'data': data_to_use,
-                                'label': label
+                                'label': label,
+                                'file_type': file_type
                             })
             elif experimental_data:
                 st.info("📊 Experimental data loaded. Configure plot settings below to visualize.")
@@ -983,6 +1034,25 @@ def create_static_mode_interface():
                     exp_marker_size = 8
                     exp_line_width = 3
 
+                # Keep only the simulation traces for which the chosen data type
+                # is physically meaningful; warn (instead of plotting) for the rest.
+                compatible_items = []
+                incompatible = {}
+                for d_item in selected_data_to_plot:
+                    ftype = d_item.get('file_type', 'recoil')
+                    if plot_data_type in get_supported_data_types(ftype):
+                        compatible_items.append(d_item)
+                    else:
+                        msg = explain_unsupported_data_type(plot_data_type, ftype)
+                        incompatible.setdefault(msg, []).append(d_item['label'])
+
+                for msg, labels in incompatible.items():
+                    skipped = ", ".join(f"**{l}**" for l in labels)
+                    st.warning(
+                        f"⚠️ Data type “{plot_data_type}” is not available for: "
+                        f"{skipped}.\n\n{msg}"
+                    )
+
                 fig = go.Figure()
 
                 colors = ['blue', 'red', 'green', 'orange', 'purple', 'brown', 'pink', 'cyan', 'magenta', 'lime']
@@ -1026,7 +1096,7 @@ def create_static_mode_interface():
                     "Gaussian": "gaussian"
                 }
 
-                for idx, data_item in enumerate(selected_data_to_plot):
+                for idx, data_item in enumerate(compatible_items):
                     depths = np.array([point['depth'] for point in data_item['data']])
                     y_values = np.array([point[y_key] for point in data_item['data']])
 
@@ -1120,13 +1190,20 @@ def create_static_mode_interface():
                     yaxis=dict(tickfont=dict(size=20, color='black'))
                 )
 
-                st.plotly_chart(fig, width='stretch')
+                if compatible_items or experimental_data:
+                    st.plotly_chart(fig, width='stretch')
+                else:
+                    st.info(
+                        f"ℹ️ Nothing to plot for data type “{plot_data_type}”. "
+                        "See the message(s) above for why the selected file(s) do not "
+                        "support this metric, then pick a different data type."
+                    )
 
                 if st.checkbox("Show Data Table", key="static_show_table"):
                     st.subheader("Selected Data")
 
-                    if selected_data_to_plot:
-                        for data_item in selected_data_to_plot:
+                    if compatible_items:
+                        for idx, data_item in enumerate(compatible_items):
                             with st.expander(f"📊 {data_item['label']}", expanded=False):
                                 df_display = pd.DataFrame(data_item['data'])
 
@@ -1166,7 +1243,7 @@ def create_static_mode_interface():
                                 )
 
                     if experimental_data:
-                        if selected_data_to_plot:
+                        if compatible_items:
                             st.markdown("---")
                         st.subheader("Experimental Data")
                         for exp_name, exp_df, exp_info in experimental_data:
