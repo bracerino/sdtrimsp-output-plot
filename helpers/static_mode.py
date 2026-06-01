@@ -681,13 +681,19 @@ def create_static_mode_interface():
             - Only meaningful if you know your implantation fluence
             """)
 
-        st.sidebar.info("Upload multiple depth_damage.dat or depth_proj.dat files and select elements/columns to plot")
+        st.info(
+            "Upload your SDTrimSP files below. Each file is automatically recognised as either a "
+            "**depth profile** (`depth_damage.dat` / `depth_proj.dat`) or a "
+            "**sputtering yield** output (`output.dat`)."
+        )
 
-        uploaded_static_files = st.sidebar.file_uploader(
-            "Upload depth_damage.dat or depth_proj.dat files",
-            type=['dat', 'txt'],
+        uploaded_static_files = st.file_uploader(
+            "Upload depth profile and/or output.dat files",
+            type=['dat', 'txt', 'out'],
             accept_multiple_files=True,
-            key="static_damage_files"
+            key="static_combined_files",
+            help="Depth profiles (depth_damage.dat / depth_proj.dat) and SDTrimSP output.dat "
+                 "files can be mixed — the type of each file is detected automatically"
         )
 
         st.sidebar.markdown("---")
@@ -718,51 +724,34 @@ def create_static_mode_interface():
             if exp_error_lines:
                 st.sidebar.error("\n\n".join(exp_error_lines))
 
-        st.sidebar.markdown("---")
-        st.sidebar.subheader("💥 Sputtering Yields (output.dat)")
-        uploaded_sputter_files = st.sidebar.file_uploader(
-            "Upload SDTrimSP output.dat files",
-            type=['dat', 'txt', 'out'],
-            accept_multiple_files=True,
-            key="static_sputter_files",
-            help="Upload SDTrimSP main output files to extract backward sputtering yields"
-        )
-
-        sputter_parsed = []
-        sputter_success_lines = []
-        sputter_error_lines = []
-        if uploaded_sputter_files:
-            for sf in uploaded_sputter_files:
-                sf_content = str(sf.read(), "utf-8")
-                parsed = parse_sdtrimsp_output_file(sf_content, sf.name)
-                if parsed is not None:
-                    sputter_parsed.append(parsed)
-                    total = parsed.get('sputtering_total')
-                    if total:
-                        sputter_success_lines.append(
-                            f"✅ **{sf.name}** — total Y = {total['sputt_coef']:.4g}"
-                        )
-                    else:
-                        sputter_success_lines.append(f"✅ **{sf.name}** — parsed")
-                else:
-                    sputter_error_lines.append(f"❌ **{sf.name}** — no sputtering data found")
-            if sputter_success_lines:
-                st.sidebar.success("\n\n".join(sputter_success_lines))
-            if sputter_error_lines:
-                st.sidebar.error("\n\n".join(sputter_error_lines))
-
-        if sputter_parsed:
-            display_sputtering_yields_section(sputter_parsed)
-            st.markdown("---")
-
         all_file_data = []
+        sputter_parsed = []
         depth_info_lines = []
-        depth_error_lines = []
+        sputter_info_lines = []
+        unrecognised_lines = []
         if uploaded_static_files:
             for uploaded_file in uploaded_static_files:
                 file_content = str(uploaded_file.read(), "utf-8")
-                elements_data, file_type = parse_static_damage_file(file_content, uploaded_file.name)
 
+                # Auto-detect the file type. output.dat sputtering files carry a
+                # distinctive "SPUTTERING DATA" header, so try that parser first;
+                # it returns None for anything else. Otherwise fall back to the
+                # depth-profile parser, which returns an empty dict on a mismatch.
+                parsed_sputter = parse_sdtrimsp_output_file(file_content, uploaded_file.name)
+                if parsed_sputter is not None:
+                    sputter_parsed.append(parsed_sputter)
+                    total = parsed_sputter.get('sputtering_total')
+                    if total:
+                        sputter_info_lines.append(
+                            f"✅ **{uploaded_file.name}** — 💥 sputtering yields — total Y = {total['sputt_coef']:.4g}"
+                        )
+                    else:
+                        sputter_info_lines.append(
+                            f"✅ **{uploaded_file.name}** — 💥 sputtering yields"
+                        )
+                    continue
+
+                elements_data, file_type = parse_static_damage_file(file_content, uploaded_file.name)
                 if elements_data:
                     all_file_data.append({
                         'filename': uploaded_file.name,
@@ -780,16 +769,22 @@ def create_static_mode_interface():
                         bin_str = f"{avg_spacing:.2f} Å"
                     type_label = "projectile (depth_proj)" if file_type == 'projectile' else "recoil/damage"
                     depth_info_lines.append(
-                        f"✅ **{uploaded_file.name}** — 🗂️ {type_label} — 📏 bin width: {bin_str}"
+                        f"✅ **{uploaded_file.name}** — 🗂️ depth profile, {type_label} — 📏 bin width: {bin_str}"
                     )
                 else:
-                    depth_error_lines.append(
-                        f"❌ **{uploaded_file.name}** — no valid data found"
+                    unrecognised_lines.append(
+                        f"❌ **{uploaded_file.name}** — not recognised as a depth profile or output.dat"
                     )
-            if depth_info_lines:
-                st.sidebar.info("\n\n".join(depth_info_lines))
-            if depth_error_lines:
-                st.sidebar.error("\n\n".join(depth_error_lines))
+
+            recognised_lines = depth_info_lines + sputter_info_lines
+            if recognised_lines:
+                st.sidebar.success("\n\n".join(recognised_lines))
+            if unrecognised_lines:
+                st.sidebar.error("\n\n".join(unrecognised_lines))
+
+        if sputter_parsed:
+            display_sputtering_yields_section(sputter_parsed)
+            st.markdown("---")
 
         if all_file_data or experimental_data:
             col_settings1, col_settings2 = st.columns(2)
