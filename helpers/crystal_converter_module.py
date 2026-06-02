@@ -227,7 +227,7 @@ def _format_table_geometry(crystal_name, dx, dy, dz, n_atoms,
         elem_list.extend([elem] * count)
     elem_str = "   ".join(f"{e:<4s}" for e in elem_list)
     dens_comment = (
-        f"! {dens:.5f}  = {n_atoms}./"
+        f"{dens:.5f}  = {n_atoms}./"
         f"{dx:.6f} /{dy:.6f} /{dz:.6f}"
     )
     return (
@@ -243,6 +243,30 @@ def _format_table_geometry(crystal_name, dx, dy, dz, n_atoms,
         f"     {elem_str}"
         f"    {dens_comment}\n"
     )
+
+
+def _reorder_elements(elements, counts, frac_positions, elem_indices, new_order):
+    """Reorder the element list (and everything tied to it) to ``new_order``.
+
+    ``new_order`` is a permutation of ``elements``. To keep Part 1 (the structure
+    block, which lists atoms in position order) consistent with Part 2 (the
+    geometry line, whose per-atom element list is built grouped by element order),
+    the atoms are regrouped to follow ``new_order`` while preserving each element's
+    internal atom order. Returns ``(elements, counts, frac_positions, elem_indices)``.
+    """
+    new_elements = list(new_order)
+    new_counts = [counts[elements.index(e)] for e in new_elements]
+
+    atoms = list(zip(frac_positions, elem_indices))
+    new_frac = []
+    new_eidx = []
+    for new_i, e in enumerate(new_elements):
+        old_idx = elements.index(e) + 1
+        for frac, eidx in atoms:
+            if eidx == old_idx:
+                new_frac.append(frac)
+                new_eidx.append(new_i + 1)
+    return new_elements, new_counts, new_frac, new_eidx
 
 
 def _clean_element_symbol(label):
@@ -806,6 +830,34 @@ def crystal_converter_interface():
             "case 'has not yet been tested' and warns of a high error rate near "
             "cell edges.  Cross-check all fractional coordinates manually."
         )
+
+    # Let the user choose the order in which elements are written into the
+    # table.crystal entry (affects both Part 1 atom labels and the Part 2
+    # element list). E.g. Ti, Nb, N instead of the parsed order.
+    if len(elements) > 1:
+        st.markdown("**Element order in the output**")
+        st.caption(
+            "Choose the order the elements are written into `table.crystal` "
+            "(Part 1 atom labels and the Part 2 element list). "
+            "Select all elements in the desired order — e.g. Ti, then Nb, then N."
+        )
+        order_sel = st.multiselect(
+            "Element order (selection order = output order):",
+            options=list(elements),
+            default=list(elements),
+            key="crystal_elem_order",
+        )
+        if len(order_sel) == len(elements) and set(order_sel) == set(elements):
+            if order_sel != list(elements):
+                elements, counts, frac_positions, elem_indices = _reorder_elements(
+                    elements, counts, frac_positions, elem_indices, order_sel
+                )
+                st.success(f"Element order set to: {' → '.join(elements)}")
+        else:
+            st.warning(
+                "Select **all** elements exactly once to define the order. "
+                f"Using the current order: {', '.join(elements)}."
+            )
 
     col_a, col_b = st.columns(2)
     with col_a:
