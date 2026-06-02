@@ -12,7 +12,15 @@ import zipfile
 import io
 
 
-def create_xy_zip(fluence_data, element_names, depth_col_key, plot_type, smooth_data, smooth_sigma, selected_elements):
+@st.cache_data(show_spinner=False)
+def create_xy_zip(cache_key, _fluence_data, element_names, depth_col_key, plot_type, smooth_data, smooth_sigma,
+                  selected_elements):
+    # _fluence_data is prefixed with an underscore so Streamlit does NOT try to
+    # hash the (large) parsed dataset on every rerun. The cheap, hashable
+    # cache_key (derived from the uploaded file) stands in for it, so the ZIP is
+    # rebuilt only when the file or one of the output-affecting options changes
+    # — not every time an unrelated widget (fluence step, depth unit, …) moves.
+    fluence_data = _fluence_data
     zip_buffer = io.BytesIO()
 
     with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
@@ -78,8 +86,7 @@ def create_xy_zip(fluence_data, element_names, depth_col_key, plot_type, smooth_
                     filename = f"fluence_{fluence:.4f}_total_density.xy"
                     zf.writestr(filename, "\n".join(xy_lines))
 
-    zip_buffer.seek(0)
-    return zip_buffer
+    return zip_buffer.getvalue()
 
 
 def parse_experimental_data(file_content, filename):
@@ -609,74 +616,53 @@ def perform_fluence_analysis(fluence_data, element_names, fluence_unit, selected
         data_label = "Concentration (atoms/cm³)"
         metric_label = "Max Concentration (atoms/cm³)"
 
+    # Build each fluence's DataFrame (with its smoothed / combined columns) exactly
+    # once, up front, instead of rebuilding it inside the per-element loop. The old
+    # code constructed a fresh DataFrame and re-smoothed every component for every
+    # (element, fluence) pair — O(elements² × fluences) work on each rerun, which is
+    # why a many-fluence file felt slow whenever a control changed. The analysis
+    # only ever reads the `data_suffix` column, so we only smooth that suffix.
+    try:
+        from scipy.ndimage import gaussian_filter1d
+    except ImportError:
+        gaussian_filter1d = None
+        smooth_data = False
+
+    combined_name = f"Combined_{'_'.join(selected_elements)}" if (
+        selected_elements and len(selected_elements) > 1) else None
+
+    prepared_dfs = []
+    for fluence in fluence_values:
+        df = pd.DataFrame(fluence_data[fluence])
+
+        if smooth_data and gaussian_filter1d is not None:
+            for elem in element_names:
+                col = f'{elem}{data_suffix}'
+                if col in df.columns:
+                    df[f'{col}_smooth'] = gaussian_filter1d(df[col], sigma=smooth_sigma)
+
+        if combined_name:
+            base_cols = [f'{elem}{data_suffix}' for elem in selected_elements
+                         if f'{elem}{data_suffix}' in df.columns]
+            if base_cols:
+                df[f'{combined_name}{data_suffix}'] = df[base_cols].sum(axis=1)
+                if smooth_data and gaussian_filter1d is not None:
+                    smooth_cols = [f'{c}_smooth' for c in base_cols if f'{c}_smooth' in df.columns]
+                    if smooth_cols:
+                        df[f'{combined_name}{data_suffix}_smooth'] = df[smooth_cols].sum(axis=1)
+
+        prepared_dfs.append(df)
+
     for element in elements_to_analyze:
         max_values = []
         max_depth_values = []
         fwhm_values = []
 
-        for fluence in fluence_values:
-            data = fluence_data[fluence]
-            df = pd.DataFrame(data)
+        smooth_col = f'{element}{data_suffix}_smooth'
+        raw_col = f'{element}{data_suffix}'
 
-            if smooth_data:
-                try:
-                    from scipy.ndimage import gaussian_filter1d
-
-                    for elem in element_names:
-                        if f'{elem}_conc' in df.columns:
-                            df[f'{elem}_conc_smooth'] = gaussian_filter1d(df[f'{elem}_conc'], sigma=smooth_sigma)
-                        if f'{elem}_frac' in df.columns:
-                            df[f'{elem}_frac_smooth'] = gaussian_filter1d(df[f'{elem}_frac'], sigma=smooth_sigma)
-                        if f'{elem}_dens' in df.columns:
-                            df[f'{elem}_dens_smooth'] = gaussian_filter1d(df[f'{elem}_dens'], sigma=smooth_sigma)
-
-                    if element.startswith('Combined_') and selected_elements:
-                        if use_fractions:
-                            combined_data = df[
-                                [f'{elem}_frac' for elem in selected_elements if f'{elem}_frac' in df.columns]].sum(
-                                axis=1)
-                        elif use_density:
-                            combined_data = df[
-                                [f'{elem}_dens' for elem in selected_elements if f'{elem}_dens' in df.columns]].sum(
-                                axis=1)
-                        else:
-                            combined_data = df[
-                                [f'{elem}_conc' for elem in selected_elements if f'{elem}_conc' in df.columns]].sum(
-                                axis=1)
-
-                        df[f'{element}{data_suffix}'] = combined_data
-                        df[f'{element}{data_suffix}_smooth'] = gaussian_filter1d(combined_data, sigma=smooth_sigma)
-
-                except ImportError:
-                    smooth_data = False
-
-            if element.startswith('Combined_') and selected_elements:
-                if smooth_data and all(f'{elem}{data_suffix}_smooth' in df.columns for elem in selected_elements):
-                    if use_fractions:
-                        combined_data = df[[f'{elem}{data_suffix}_smooth' for elem in selected_elements]].sum(axis=1)
-                    elif use_density:
-                        combined_data = df[[f'{elem}{data_suffix}_smooth' for elem in selected_elements]].sum(axis=1)
-                    else:
-                        combined_data = df[[f'{elem}{data_suffix}_smooth' for elem in selected_elements]].sum(axis=1)
-                    data_col = f'{element}{data_suffix}_smooth'
-                    df[data_col] = combined_data
-                else:
-                    if use_fractions:
-                        combined_data = df[[f'{elem}{data_suffix}' for elem in selected_elements if
-                                            f'{elem}{data_suffix}' in df.columns]].sum(axis=1)
-                    elif use_density:
-                        combined_data = df[[f'{elem}{data_suffix}' for elem in selected_elements if
-                                            f'{elem}{data_suffix}' in df.columns]].sum(axis=1)
-                    else:
-                        combined_data = df[[f'{elem}{data_suffix}' for elem in selected_elements if
-                                            f'{elem}{data_suffix}' in df.columns]].sum(axis=1)
-                    data_col = f'{element}{data_suffix}'
-                    df[data_col] = combined_data
-            else:
-                if smooth_data and f'{element}{data_suffix}_smooth' in df.columns:
-                    data_col = f'{element}{data_suffix}_smooth'
-                else:
-                    data_col = f'{element}{data_suffix}'
+        for df in prepared_dfs:
+            data_col = smooth_col if (smooth_data and smooth_col in df.columns) else raw_col
 
             if data_col in df.columns:
                 data_values = df[data_col].values
@@ -835,6 +821,7 @@ def perform_fluence_analysis(fluence_data, element_names, fluence_unit, selected
     )
 
 
+@st.cache_data(show_spinner="Parsing SDTrimSP output…")
 def parse_sdtrimsp_file(file_content):
     lines = file_content.strip().split('\n')
 
@@ -898,9 +885,6 @@ def parse_sdtrimsp_file(file_content):
     i = 0
     while i < len(lines):
         line = lines[i].strip()
-
-        if i % 100 == 0:
-            print(f"Processing line {i}/{total_lines}")
 
         if not header_found and (('#' in line and ('center' in line or 'density' in line)) or
                                  ('xxx(*)' in line and 'dns(*)' in line)):
@@ -1451,7 +1435,7 @@ def main():
             font-weight: 600;
         ">
             <span style="color:#2563eb; font-weight:800;">Release:</span>
-            v0.7 &nbsp; | &nbsp;
+            v0.7.1 &nbsp; | &nbsp;
             <span style="color:#2563eb; font-weight:800;">Updated:</span>
             June 2, 2026
         </div>
@@ -1775,10 +1759,15 @@ def main():
             selected_elements = []
             if len(element_names) >= 2:
                 st.sidebar.subheader("Element Selection")
+                # Offer every component, including the first one. Slicing
+                # element_names[1:] used to hide whichever component happened to
+                # be column 1 (e.g. one of several same-element beam species such
+                # as 'N'), so that species could never be combined and the picker
+                # appeared to be missing it.
                 selected_elements = st.sidebar.multiselect(
                     "Select elements to combine:",
-                    element_names[1:],
-                    default=element_names[1:]
+                    element_names,
+                    default=element_names
                 )
 
             fluence_unit = st.sidebar.radio("Fluence Units:", ["atoms/Ų", "atoms/cm²"], index=1)
@@ -1805,7 +1794,7 @@ def main():
             st.sidebar.subheader("💾 Bulk Download")
             depth_key = 'depth_A' if depth_unit == "Angstroms (Å)" else 'depth_nm'
             zip_buf = create_xy_zip(
-                fluence_data, element_names, depth_key,
+                file_content, fluence_data, element_names, depth_key,
                 plot_type, smooth_data, smooth_sigma, selected_elements
             )
             smoothed_tag = "_smoothed" if smooth_data else ""
