@@ -94,7 +94,9 @@ def parse_sdtrimsp_output_file(file_content, filename):
                 j += 1
             break
 
-    projectile = None
+    # A run can have several beam components (e.g. the same element implanted at
+    # two energies), so collect every projectile with E0 > 0, not just one.
+    projectiles = []
     for i, line in enumerate(lines):
         stripped = line.strip()
         if stripped.startswith('CPT') and 'E0' in stripped and ('AlPHA0' in stripped or 'ALPHA0' in stripped):
@@ -110,15 +112,16 @@ def parse_sdtrimsp_output_file(file_content, filename):
                     cpt = int(parts[0])
                     e0 = float(parts[1])
                     if e0 > 0:
-                        projectile = {
+                        projectiles.append({
                             'cpt': cpt,
                             'symbol': components.get(cpt, f'cpt{cpt}'),
                             'energy_eV': e0
-                        }
+                        })
                 except ValueError:
                     break
                 j += 1
             break
+    projectile = projectiles[0] if projectiles else None
 
     fluence = None
     for i, line in enumerate(lines):
@@ -216,6 +219,7 @@ def parse_sdtrimsp_output_file(file_content, filename):
         'filename': filename,
         'components': components,
         'projectile': projectile,
+        'projectiles': projectiles,
         'fluence': fluence,
         'sputtering': sputtering,
         'sputtering_total': sputtering_total,
@@ -228,36 +232,60 @@ def display_sputtering_yields_section(parsed_files):
     st.markdown("### 💥 Sputtering Yields")
 
     summary_rows = []
-    all_symbols = set()
-    for pf in parsed_files:
-        for row in pf['sputtering']:
-            if not row.get('no_sputtering'):
-                all_symbols.add(row['symbol'])
 
-    sorted_symbols = sorted(all_symbols)
+    # A chemical symbol can appear in several components (e.g. a target N and an
+    # implanted N). Collect the component numbers per symbol so each one gets its
+    # own column; symbols with more than one component also get a summed column.
+    sym_cpts = {}
+    for pf in parsed_files:
+        for r in pf['sputtering']:
+            sym_cpts.setdefault(r['symbol'], [])
+            if r['cpt'] not in sym_cpts[r['symbol']]:
+                sym_cpts[r['symbol']].append(r['cpt'])
+
+    yield_columns = []  # (column_name, kind, symbol, cpt)
+    for sym in sorted(sym_cpts):
+        cpts = sym_cpts[sym]
+        if len(cpts) > 1:
+            for cpt in cpts:
+                yield_columns.append((f'Y({sym} cpt {cpt})', 'comp', sym, cpt))
+            yield_columns.append((f'Y({sym}, sum)', 'sum', sym, None))
+        else:
+            yield_columns.append((f'Y({sym})', 'comp', sym, cpts[0]))
 
     for pf in parsed_files:
         row = {'File': pf['filename']}
-        proj = pf.get('projectile')
-        if proj:
-            row['Projectile'] = proj['symbol']
-            row['Energy (eV)'] = proj['energy_eV']
+        projs = pf.get('projectiles') or ([pf['projectile']] if pf.get('projectile') else [])
+        if projs:
+            row['Projectile'] = ", ".join(p['symbol'] for p in projs)
+            row['Energy (eV)'] = ", ".join(f"{p['energy_eV']:.0f}" for p in projs)
         else:
             row['Projectile'] = '-'
-            row['Energy (eV)'] = float('nan')
+            row['Energy (eV)'] = '-'
 
         total = pf.get('sputtering_total')
         row['Total Yield (atoms/ion)'] = total['sputt_coef'] if total else float('nan')
 
-        symbol_yields = {r['symbol']: r['sputt_coef'] for r in pf['sputtering'] if not r.get('no_sputtering')}
-        for sym in sorted_symbols:
-            row[f'Y({sym})'] = symbol_yields.get(sym, 0.0)
+        cpt_yields = {
+            (r['symbol'], r['cpt']): (0.0 if r.get('no_sputtering') else r['sputt_coef'])
+            for r in pf['sputtering']
+        }
+        for col_name, kind, sym, cpt in yield_columns:
+            if kind == 'comp':
+                row[col_name] = cpt_yields.get((sym, cpt), 0.0)
+            else:  # summed over all components of this symbol
+                row[col_name] = sum(v for (s, _c), v in cpt_yields.items() if s == sym)
 
         summary_rows.append(row)
 
     summary_df = pd.DataFrame(summary_rows)
 
     st.markdown("#### Summary across files")
+    if any(len(cpts) > 1 for cpts in sym_cpts.values()):
+        st.caption(
+            "Some elements have several components (same symbol) — they are shown "
+            "as separate `Y(sym cpt N)` columns plus a combined `Y(sym, sum)` column."
+        )
     st.dataframe(summary_df, width='stretch', hide_index=True)
 
     csv_summary = summary_df.to_csv(index=False)
@@ -277,11 +305,12 @@ def display_sputtering_yields_section(parsed_files):
     for tab, pf in zip(file_tabs, parsed_files):
         with tab:
             info_cols = st.columns(3)
-            proj = pf.get('projectile')
+            projs = pf.get('projectiles') or ([pf['projectile']] if pf.get('projectile') else [])
             with info_cols[0]:
-                st.metric("Projectile", proj['symbol'] if proj else '-')
+                st.metric("Projectile", ", ".join(p['symbol'] for p in projs) if projs else '-')
             with info_cols[1]:
-                st.metric("Energy (eV)", f"{proj['energy_eV']:.1f}" if proj else '-')
+                st.metric("Energy (eV)",
+                          ", ".join(f"{p['energy_eV']:.0f}" for p in projs) if projs else '-')
             with info_cols[2]:
                 total = pf.get('sputtering_total')
                 st.metric("Total backward yield (atoms/ion)",
@@ -433,63 +462,70 @@ def parse_static_damage_file(file_content, filename):
     is_projectile = 'DEPTH DISTRIBUTIONS (PROJECTILES)' in file_content
     file_type = 'projectile' if is_projectile else 'recoil'
 
-    elements_data = {}
-    current_element = None
+    # Collect each COMPONENT block as a separate entry. Several components can
+    # share the same chemical symbol (e.g. a target N and an implanted N, or two
+    # beam N's at different energies all printed as "N"), so we must NOT key them
+    # by symbol alone — that would let later components overwrite earlier ones.
+    parsed_components = []
+    current_symbol = None
+    current_cpt = None
     current_data = []
     in_data_section = False
     header_columns = []
+
+    def flush_component():
+        if current_symbol and current_data:
+            parsed_components.append({
+                'symbol': current_symbol,
+                'cpt': current_cpt,
+                'data': current_data.copy(),
+                'header': header_columns.copy(),
+            })
 
     for i, line in enumerate(lines):
         line_stripped = line.strip()
 
         if line_stripped.startswith('# CPT.') or line_stripped.startswith('#Calculated Values'):
-            if current_element and current_data:
-                elements_data[current_element] = {
-                    'data': current_data.copy(),
-                    'header': header_columns.copy()
-                }
+            flush_component()
+            current_data = []
             break
 
         if line_stripped.startswith('# DEPTH DISTRIBUTIONS') and 'COMPONENT' in line_stripped:
-            if current_element and current_data:
-                elements_data[current_element] = {
-                    'data': current_data.copy(),
-                    'header': header_columns.copy()
-                }
+            flush_component()
+            current_data = []
 
             parts = line.split(':')
             if len(parts) >= 2:
                 element_part = parts[1].strip()
-                current_element = element_part.split()[0].strip()
+                current_symbol = element_part.split()[0].strip()
+                m = re.search(r'COMPONENT\(\s*(\d+)\s*\)', line)
+                current_cpt = int(m.group(1)) if m else None
                 current_data = []
                 header_columns = []
                 in_data_section = False
 
         elif line_stripped.startswith('# DEPTH DISTRIBUTIONS') and 'ALL' in line_stripped:
-            if current_element and current_data:
-                elements_data[current_element] = {
-                    'data': current_data.copy(),
-                    'header': header_columns.copy()
-                }
-            current_element = None
+            flush_component()
+            current_symbol = None
+            current_cpt = None
+            current_data = []
             in_data_section = False
             continue
 
-        elif current_element and line_stripped.startswith('#') and (
+        elif current_symbol and line_stripped.startswith('#') and (
                 'DEPTH' in line_stripped or 'DEPTH/LENGTH' in line_stripped) and 'STOPS' in line_stripped:
             header_parts = line_stripped.replace('#', '').split()
             header_columns = header_parts
             in_data_section = True
             continue
 
-        elif in_data_section and current_element and line_stripped and not line_stripped.startswith('#'):
+        elif in_data_section and current_symbol and line_stripped and not line_stripped.startswith('#'):
             if 'sum' in line_stripped.lower():
                 in_data_section = False
-                if current_element and current_data:
-                    elements_data[current_element] = {
-                        'data': current_data.copy(),
-                        'header': header_columns.copy()
-                    }
+                flush_component()
+                current_data = []
+                current_symbol = None
+                current_cpt = None
                 continue
 
             try:
@@ -508,22 +544,58 @@ def parse_static_damage_file(file_content, filename):
             except (ValueError, IndexError) as e:
                 continue
 
-    if current_element and current_data:
-        elements_data[current_element] = {
-            'data': current_data.copy(),
-            'header': header_columns.copy()
+    flush_component()
+
+    # Build the final dict with display keys that stay unique when a symbol is
+    # repeated: a lone symbol keeps its plain name ("Ti"), while repeats are
+    # disambiguated by component number ("N (cpt 1)", "N (cpt 5)", ...).
+    symbol_counts = {}
+    for c in parsed_components:
+        symbol_counts[c['symbol']] = symbol_counts.get(c['symbol'], 0) + 1
+
+    elements_data = {}
+    for c in parsed_components:
+        sym = c['symbol']
+        if symbol_counts[sym] > 1 and c['cpt'] is not None:
+            key = f"{sym} (cpt {c['cpt']})"
+        elif symbol_counts[sym] > 1:
+            # No component number available; fall back to an occurrence index.
+            n = sum(1 for k in elements_data if k.split(' (')[0] == sym) + 1
+            key = f"{sym} (#{n})"
+        else:
+            key = sym
+        elements_data[key] = {
+            'data': c['data'],
+            'header': c['header'],
+            'symbol': sym,
+            'cpt': c['cpt'],
         }
 
     return elements_data, file_type
 
 
-def calculate_processed_data_static(elements_data, column_name, fluence_per_cm2=None):
+def calculate_processed_data_static(elements_data, column_name, fluence_per_cm2=None,
+                                    extra_elements=None):
+    """Process per-depth values into the various plot metrics.
+
+    ``extra_elements`` (optional) holds synthetic series — e.g. the sum of all
+    components that share a chemical symbol. They are processed like real
+    elements but are **excluded** from the per-depth total used for atomic
+    fractions, so adding a "sum" series never double-counts the denominator.
+    """
+    extra_elements = extra_elements or {}
+
     all_depths = set()
     for element_info in elements_data.values():
         for point in element_info['data']:
             all_depths.add(point['depth'])
+    for element_info in extra_elements.values():
+        for point in element_info['data']:
+            all_depths.add(point['depth'])
     all_depths = sorted(all_depths)
 
+    # Per-depth totals (and thus atomic fractions) are built only from the real
+    # components — the synthetic sums are combinations of those, not new matter.
     depth_data = {depth: {} for depth in all_depths}
     for element, element_info in elements_data.items():
         for point in element_info['data']:
@@ -538,16 +610,16 @@ def calculate_processed_data_static(elements_data, column_name, fluence_per_cm2=
 
     processed_data = {}
 
-    for element in elements_data.keys():
-        element_total = sum(
-            point[column_name]
-            for point in elements_data[element]['data']
-        )
+    for element, element_info in list(elements_data.items()) + list(extra_elements.items()):
+        value_by_depth = {}
+        for point in element_info['data']:
+            value_by_depth[point['depth']] = value_by_depth.get(point['depth'], 0) + point[column_name]
+        element_total = sum(value_by_depth.values())
 
         processed_data[element] = []
 
         for depth in all_depths:
-            value = depth_data[depth].get(element, 0)
+            value = value_by_depth.get(depth, 0)
 
             total_at_depth = sum(depth_data[depth].values())
 
@@ -623,6 +695,34 @@ DATA_TYPE_OPTIONS = [
     "Density (ions/Å)",
     "Concentration (ions/cm³)",
 ]
+
+
+def build_symbol_groups(elements_data):
+    """Map each chemical symbol to the list of component keys that share it.
+
+    Returns an ordered dict-like {symbol: [keys...]} preserving first-seen order.
+    Symbols mapping to more than one key are the ones that can be summed.
+    """
+    groups = {}
+    for key, info in elements_data.items():
+        sym = info.get('symbol', key)
+        groups.setdefault(sym, []).append(key)
+    return groups
+
+
+def synthesize_summed_raw(elements_data, member_keys):
+    """Sum the raw per-depth STOPS/VACANCIES of several components into one series."""
+    combined = {}
+    for k in member_keys:
+        for point in elements_data[k]['data']:
+            d = point['depth']
+            agg = combined.setdefault(d, {'stops': 0.0, 'vacancies': 0.0})
+            agg['stops'] += point.get('stops', 0.0)
+            agg['vacancies'] += point.get('vacancies', 0.0)
+    return [
+        {'depth': d, 'stops': v['stops'], 'vacancies': v['vacancies']}
+        for d, v in sorted(combined.items())
+    ]
 
 
 def get_supported_data_types(file_type):
@@ -830,58 +930,89 @@ def create_static_mode_interface():
                         available_elements = list(file_data['elements_data'].keys())
                         file_type = file_data.get('file_type', 'recoil')
 
+                        # When a chemical symbol appears in several components
+                        # (e.g. target N + implanted N, or two beam N's), each
+                        # component is listed separately and an extra Σ option
+                        # plots their sum.
+                        groups = build_symbol_groups(file_data['elements_data'])
+                        sum_option_map = {}
+                        plot_options = list(available_elements)
+                        for sym, keys in groups.items():
+                            if len(keys) > 1:
+                                cpts = [
+                                    str(file_data['elements_data'][k].get('cpt'))
+                                    for k in keys
+                                ]
+                                sum_label = f"Σ {sym} (sum of components {', '.join(cpts)})"
+                                plot_options.append(sum_label)
+                                sum_option_map[sum_label] = keys
+
+                        if sum_option_map:
+                            st.caption(
+                                "This file has multiple components of the same element — "
+                                "each one is listed separately, plus a **Σ** option that sums them."
+                            )
+
                         col1, col2 = st.columns([1, 1])
 
                         with col1:
-                            selected_element = st.selectbox(
-                                f"Select element",
-                                options=['None'] + available_elements,
-                                index=len(available_elements),
-                                key=f"element_select_{file_idx}"
+                            selected_elements = st.multiselect(
+                                "Select element(s) / components",
+                                options=plot_options,
+                                default=available_elements,
+                                key=f"element_select_{file_idx}",
+                                help="Pick any number of components. Σ entries plot the "
+                                     "sum of all components of that element."
                             )
 
                         with col2:
-                            if selected_element != 'None':
-                                # Projectile files (depth_proj.dat) have no VACANCIES
-                                # column (their last column is NRT-DPA), so only STOPS
-                                # is offered for them.
-                                if file_type == 'projectile':
-                                    available_columns = ['STOPS']
-                                else:
-                                    available_columns = ['STOPS', 'VACANCIES']
-
-                                selected_column = st.selectbox(
-                                    f"Select column to plot",
-                                    options=available_columns,
-                                    key=f"column_select_{file_idx}"
-                                )
+                            # Projectile files (depth_proj.dat) have no VACANCIES
+                            # column (their last column is NRT-DPA), so only STOPS
+                            # is offered for them.
+                            if file_type == 'projectile':
+                                available_columns = ['STOPS']
                             else:
-                                selected_column = None
+                                available_columns = ['STOPS', 'VACANCIES']
 
-                        if selected_element != 'None' and selected_column:
-                            label = st.text_input(
-                                f"Label for plot legend",
-                                value=f"{file_data['filename']} - {selected_element} - {selected_column}",
-                                key=f"label_{file_idx}_{selected_element}_{selected_column}"
+                            selected_column = st.selectbox(
+                                "Select column to plot",
+                                options=available_columns,
+                                key=f"column_select_{file_idx}"
                             )
 
+                        if selected_elements and selected_column:
                             column_key = selected_column.lower()
+
+                            # Synthesize raw data for any selected Σ (sum) options.
+                            extra_elements = {}
+                            for sel in selected_elements:
+                                if sel in sum_option_map:
+                                    extra_elements[sel] = {
+                                        'data': synthesize_summed_raw(
+                                            file_data['elements_data'], sum_option_map[sel]
+                                        )
+                                    }
 
                             processed_data = calculate_processed_data_static(
                                 file_data['elements_data'],
                                 column_key,
-                                fluence
+                                fluence,
+                                extra_elements=extra_elements,
                             )
-                            data_to_use = processed_data[selected_element]
 
-                            selected_data_to_plot.append({
-                                'filename': file_data['filename'],
-                                'element': selected_element,
-                                'column': selected_column,
-                                'data': data_to_use,
-                                'label': label,
-                                'file_type': file_type
-                            })
+                            for sel in selected_elements:
+                                data_to_use = processed_data.get(sel)
+                                if data_to_use is None:
+                                    continue
+                                label = f"{file_data['filename']} - {sel} - {selected_column}"
+                                selected_data_to_plot.append({
+                                    'filename': file_data['filename'],
+                                    'element': sel,
+                                    'column': selected_column,
+                                    'data': data_to_use,
+                                    'label': label,
+                                    'file_type': file_type
+                                })
             elif experimental_data:
                 st.info("📊 Experimental data loaded. Configure plot settings below to visualize.")
 
