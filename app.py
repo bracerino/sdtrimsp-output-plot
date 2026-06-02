@@ -1094,32 +1094,52 @@ def parse_dynamic_sputter_yields(file_content):
         group_for = [re.sub(r'_\d+$', '', s) for s in symbols]
 
     n_steps = len(fluences)
-    per_symbol = {s: [0.0] * n_steps for s in symbols}
+
+    # Per-component yields, kept index-based so that two components sharing the
+    # same chemical symbol (e.g. the projectile N and an N already present in the
+    # target) stay separable instead of overwriting each other in a dict.
+    comp_yields = [[0.0] * n_steps for _ in range(n_comp)]
     for step, row in enumerate(yields_rows):
         for i in range(min(len(row), n_comp)):
-            per_symbol[symbols[i]][step] = row[i]
+            comp_yields[i][step] = row[i]
+
+    # Disambiguate duplicate symbols for display: N, N -> "N #1", "N #2".
+    sym_counts = {s: symbols.count(s) for s in set(symbols)}
+    sym_seen = {}
+    comp_labels = []
+    for s in symbols:
+        if sym_counts.get(s, 0) > 1:
+            sym_seen[s] = sym_seen.get(s, 0) + 1
+            comp_labels.append(f"{s} #{sym_seen[s]}")
+        else:
+            comp_labels.append(s)
 
     group_order = []
-    group_members = {}
+    group_members = {}        # group -> list of component indices
+    group_member_labels = {}  # group -> list of disambiguated component labels
     group_yields = {}
     for i, s in enumerate(symbols):
         g = group_for[i]
         if g not in group_yields:
             group_yields[g] = [0.0] * n_steps
             group_members[g] = []
+            group_member_labels[g] = []
             group_order.append(g)
-        group_members[g].append(s)
+        group_members[g].append(i)
+        group_member_labels[g].append(comp_labels[i])
         for step in range(n_steps):
-            group_yields[g][step] += per_symbol[s][step]
+            group_yields[g][step] += comp_yields[i][step]
 
     total = [sum(row[i] for i in range(min(len(row), n_comp))) for row in yields_rows]
 
     return {
         'symbols': symbols,
+        'comp_labels': comp_labels,
+        'comp_yields': comp_yields,
         'group_order': group_order,
         'group_members': group_members,
+        'group_member_labels': group_member_labels,
         'group_yields': group_yields,
-        'per_symbol': per_symbol,
         'fluences': fluences,
         'total': total,
     }
@@ -1130,15 +1150,20 @@ def display_dynamic_sputter_yields_section():
     st.markdown("### 💥 Sputtering Yields vs Fluence")
     st.caption(
         "Upload (or paste) the main SDTrimSP run log (the file with the per-step `flc: ... Ysum: ...` lines). "
-        "Components of the same element (e.g. Ti and Ti_1) are summed; the total yield sums all components."
+        "This file is originally called **`time_run.dat`** in the SDTrimSP output. "
+        "Components of the same element are summed into a per-element yield, but each component is also "
+        "available separately — so when the projectile and the target share an element (e.g. implanting N "
+        "into a target that already contains N), you can plot the implanted-N and target-N yields on their own, "
+        "not only their sum. The total yield sums all components."
     )
 
     ups = st.file_uploader(
-        "Choose SDTrimSP dynamic output log(s) (with 'Ysum:' lines)",
+        "Choose SDTrimSP dynamic output log(s) — originally named time_run.dat (with 'Ysum:' lines)",
         type=['dat', 'txt', 'out', 'log'],
         accept_multiple_files=True,
         key="dynamic_sputter_log",
-        help="Upload one or more run logs to compare their sputtering yields in a single graph."
+        help="Upload one or more run logs (time_run.dat) to compare their sputtering yields in a single graph. "
+             "Per-element sums, individual components, and the total are all selectable."
     )
 
     # Allow pasting log content directly, in addition to uploading files.
@@ -1213,17 +1238,17 @@ def display_dynamic_sputter_yields_section():
     default_options = []
     for fname, p in parsed_files.items():
         for g in p['group_order']:
-            members = p['group_members'][g]
-            ylabel = f"Y({g})" if members == [g] else f"Y({g}={'+'.join(members)})"
+            member_labels = p['group_member_labels'][g]
+            ylabel = f"Y({g})" if member_labels == [g] else f"Y({g}={'+'.join(member_labels)})"
             opt = f"{fname} | {ylabel}"
             options.append(opt)
             option_map[opt] = (fname, 'group', g)
             if not multi:
                 default_options.append(opt)
-        for s in p['symbols']:
-            opt = f"{fname} | Y[{s}] (component)"
+        for i, lbl in enumerate(p['comp_labels']):
+            opt = f"{fname} | Y[{lbl}] (component)"
             options.append(opt)
-            option_map[opt] = (fname, 'component', s)
+            option_map[opt] = (fname, 'component', i)
         opt_total = f"{fname} | Total"
         options.append(opt_total)
         option_map[opt_total] = (fname, 'total', None)
@@ -1305,7 +1330,7 @@ def display_dynamic_sputter_yields_section():
         if kind == 'group':
             return p['group_yields'][key]
         if kind == 'component':
-            return p['per_symbol'][key]
+            return p['comp_yields'][key]
         return p['total']
 
     def series_label(opt, fname, kind, key):
