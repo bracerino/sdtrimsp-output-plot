@@ -197,6 +197,26 @@ def parse_sdtrimsp_output_file(file_content, filename):
 
         return rows, total
 
+    # Per-cause breakdown: how many atoms of species X were back-sputtered by
+    # each projectile/recoil component Y. SDTrimSP prints one line per (X, Y)
+    # pair, e.g. "BACK.SPUTTERED PARTIC.( 6 BY  1)= 875". Summing over Y for a
+    # given X recovers that species' total backward-sputtered count, so each
+    # term's share of that sum scales the species' yield into a per-cause
+    # contribution. This lets a multi-component beam (e.g. the same element at
+    # two energies) have its sputtering shown separately per beam component.
+    sputtered_by = {}  # (target_cpt, cause_cpt) -> count
+    back_sput_re = re.compile(r'BACK\.SPUTTERED PARTIC\.\(\s*(\d+)\s+BY\s+(\d+)\)\s*=\s*([\d.eE+\-]+)')
+    for line in lines:
+        m = back_sput_re.search(line)
+        if m:
+            try:
+                tgt = int(m.group(1))
+                cause = int(m.group(2))
+                count = float(m.group(3))
+                sputtered_by[(tgt, cause)] = sputtered_by.get((tgt, cause), 0.0) + count
+            except ValueError:
+                pass
+
     sputtering = []
     sputtering_total = None
     transmission_sputtering = []
@@ -224,8 +244,87 @@ def parse_sdtrimsp_output_file(file_content, filename):
         'sputtering': sputtering,
         'sputtering_total': sputtering_total,
         'transmission_sputtering': transmission_sputtering,
-        'transmission_total': transmission_total
+        'transmission_total': transmission_total,
+        'sputtered_by': sputtered_by,
     }
+
+
+def _render_sputter_cause_breakdown(pf, projs):
+    """Show each species' backward-sputtering yield split by the projectile or
+    recoil component that caused it.
+
+    SDTrimSP normalises the per-species yield ``Y(X)`` to the total dose, and the
+    ``BACK.SPUTTERED PARTIC.(X BY Y)`` counts partition that species' sputtered
+    atoms by their cause Y. So Y's share of species X's yield is simply
+    ``Y(X) × count(X BY Y) / Σ_Y count(X BY Y)``. Summing those contributions over
+    all sputtered species gives the yield attributable to each cause — in
+    particular each individual beam component when the beam has several.
+    """
+    sputtered_by = pf.get('sputtered_by') or {}
+    if not sputtered_by:
+        return
+
+    components = pf.get('components') or {}
+    beam_cpts = {p['cpt'] for p in projs}
+
+    # Per-species totals over all causes, plus that species' reported yield.
+    species_total_count = {}
+    for (tgt, _cause), count in sputtered_by.items():
+        species_total_count[tgt] = species_total_count.get(tgt, 0.0) + count
+    species_yield = {
+        r['cpt']: (0.0 if r.get('no_sputtering') else r['sputt_coef'])
+        for r in pf['sputtering']
+    }
+
+    target_cpts = sorted(species_total_count)
+    cause_cpts = sorted({cause for (_tgt, cause) in sputtered_by})
+
+    rows = []
+    for cause in cause_cpts:
+        sym = components.get(cause, f'cpt{cause}')
+        kind = 'beam' if cause in beam_cpts else 'recoil/cascade'
+        row = {'Caused by': f"{sym} (cpt {cause})", 'Type': kind}
+        cause_total_yield = 0.0
+        for tgt in target_cpts:
+            count = sputtered_by.get((tgt, cause), 0.0)
+            tot = species_total_count.get(tgt, 0.0)
+            contrib = species_yield.get(tgt, 0.0) * count / tot if tot > 0 else 0.0
+            tgt_sym = components.get(tgt, f'cpt{tgt}')
+            row[f'Y({tgt_sym} cpt {tgt})'] = contrib
+            cause_total_yield += contrib
+        row['Total Y (atoms/ion)'] = cause_total_yield
+        rows.append(row)
+
+    if not rows:
+        return
+
+    with st.expander("🔬 Yield broken down by causing component (beam vs cascade)", expanded=False):
+        st.caption(
+            "Each sputtered species' yield is split by the projectile/recoil that "
+            "caused it, using the `BACK.SPUTTERED PARTIC.(X BY Y)` counts. When the "
+            "beam has several components (e.g. the same element at two energies), "
+            "this shows **each beam component's own contribution** to the yield, "
+            "separately from the collision-cascade (recoil) contribution."
+        )
+        breakdown_df = pd.DataFrame(rows)
+        st.dataframe(breakdown_df, width='stretch', hide_index=True)
+
+        beam_yield = sum(r['Total Y (atoms/ion)'] for r in rows if r['Type'] == 'beam')
+        cascade_yield = sum(r['Total Y (atoms/ion)'] for r in rows if r['Type'] != 'beam')
+        b1, b2 = st.columns(2)
+        with b1:
+            st.metric("Yield from beam components (direct)", f"{beam_yield:.5f}")
+        with b2:
+            st.metric("Yield from recoil cascade", f"{cascade_yield:.5f}")
+
+        st.download_button(
+            label="📥 Download yield-by-cause breakdown as CSV",
+            data=breakdown_df.to_csv(index=False),
+            file_name=f"{pf['filename']}_yield_by_cause.csv",
+            mime="text/csv",
+            key=f"download_cause_{pf['filename']}",
+            type="primary"
+        )
 
 
 def display_sputtering_yields_section(parsed_files):
@@ -364,6 +463,12 @@ def display_sputtering_yields_section(parsed_files):
                 key=f"download_back_{pf['filename']}",
                 type="primary"
             )
+
+            # Optional breakdown of each species' yield by the projectile/recoil
+            # component that caused it. Useful when the beam is several components
+            # of the same element at different energies — each beam component's
+            # contribution to the sputtering yield can then be read separately.
+            _render_sputter_cause_breakdown(pf, projs)
 
             if pf['transmission_sputtering'] or pf.get('transmission_total'):
                 st.markdown("##### Transmission sputtering")
@@ -980,7 +1085,22 @@ def create_static_mode_interface():
                                 key=f"column_select_{file_idx}"
                             )
 
-                        if selected_elements and selected_column:
+                        # Combine any arbitrary set of components into one summed
+                        # profile, mirroring the "Select elements to combine"
+                        # feature of dynamic mode. Unlike the Σ option (which only
+                        # sums components of the *same* chemical symbol), this lets
+                        # the user add together different elements.
+                        combine_selection = st.multiselect(
+                            "Combine elements into a single profile (sum):",
+                            options=available_elements,
+                            default=[],
+                            key=f"combine_select_{file_idx}",
+                            help="Pick two or more components to additionally plot "
+                                 "their summed profile — just like the element "
+                                 "combination in dynamic mode."
+                        )
+
+                        if (selected_elements or len(combine_selection) >= 2) and selected_column:
                             column_key = selected_column.lower()
 
                             # Synthesize raw data for any selected Σ (sum) options.
@@ -992,6 +1112,16 @@ def create_static_mode_interface():
                                             file_data['elements_data'], sum_option_map[sel]
                                         )
                                     }
+
+                            # Synthesize the user-defined combination, if any.
+                            combined_key = None
+                            if len(combine_selection) >= 2:
+                                combined_key = f"Combined ({'+'.join(combine_selection)})"
+                                extra_elements[combined_key] = {
+                                    'data': synthesize_summed_raw(
+                                        file_data['elements_data'], combine_selection
+                                    )
+                                }
 
                             processed_data = calculate_processed_data_static(
                                 file_data['elements_data'],
@@ -1010,6 +1140,17 @@ def create_static_mode_interface():
                                     'element': sel,
                                     'column': selected_column,
                                     'data': data_to_use,
+                                    'label': label,
+                                    'file_type': file_type
+                                })
+
+                            if combined_key and processed_data.get(combined_key):
+                                label = f"{file_data['filename']} - {combined_key} - {selected_column}"
+                                selected_data_to_plot.append({
+                                    'filename': file_data['filename'],
+                                    'element': combined_key,
+                                    'column': selected_column,
+                                    'data': processed_data[combined_key],
                                     'label': label,
                                     'file_type': file_type
                                 })
