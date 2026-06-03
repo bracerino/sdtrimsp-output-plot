@@ -1712,6 +1712,27 @@ def main():
                     st.write("❌ No data lines found")
 
                 return
+
+            # Guard against pathologically large runs. The fluence keys are in
+            # atoms/Ų (= ×10¹⁶ atoms/cm²); a file whose largest fluence exceeds
+            # this threshold typically carries a very large number of depth
+            # steps, which would parse into an unnecessarily large in-memory
+            # dataset (and a correspondingly heavy .xy ZIP). Reject it here with
+            # a clear message instead of letting the app try to render it.
+            MAX_ALLOWED_FLUENCE = 5000.0
+            max_fluence = max(fluence_data.keys()) if fluence_data else 0.0
+            if max_fluence > MAX_ALLOWED_FLUENCE:
+                st.error(
+                    f"🚫 **File not loaded — fluence too large.**\n\n"
+                    f"The largest fluence in **{uploaded_file.name}** is "
+                    f"`{max_fluence:.1f}` atoms/Ų (= {max_fluence:.2e} ×10¹⁶ atoms/cm²), "
+                    f"which exceeds the supported limit of `{MAX_ALLOWED_FLUENCE:.0f}` atoms/Ų.\n\n"
+                    f"Files with such large fluences usually contain a very large "
+                    f"number of depth steps and can overload the available memory. "
+                    f"Please upload an output file with fluences at or below the limit."
+                )
+                return
+
             st.sidebar.header("Plot Controls")
 
             fluence_values = sorted(fluence_data.keys())
