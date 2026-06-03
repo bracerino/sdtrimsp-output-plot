@@ -679,28 +679,19 @@ def parse_static_damage_file(file_content, filename):
     return elements_data, file_type
 
 
-def calculate_processed_data_static(elements_data, column_name, fluence_per_cm2=None,
-                                    extra_elements=None):
+def calculate_processed_data_static(elements_data, column_name, fluence_per_cm2=None):
     """Process per-depth values into the various plot metrics.
 
-    ``extra_elements`` (optional) holds synthetic series — e.g. the sum of all
-    components that share a chemical symbol. They are processed like real
-    elements but are **excluded** from the per-depth total used for atomic
-    fractions, so adding a "sum" series never double-counts the denominator.
+    Combined / Σ profiles are *not* computed here. They are built afterwards by
+    :func:`sum_processed_series`, which sums the finished per-element metrics — so
+    each combined curve is a true superposition of its parts for every data type.
     """
-    extra_elements = extra_elements or {}
-
     all_depths = set()
     for element_info in elements_data.values():
         for point in element_info['data']:
             all_depths.add(point['depth'])
-    for element_info in extra_elements.values():
-        for point in element_info['data']:
-            all_depths.add(point['depth'])
     all_depths = sorted(all_depths)
 
-    # Per-depth totals (and thus atomic fractions) are built only from the real
-    # components — the synthetic sums are combinations of those, not new matter.
     depth_data = {depth: {} for depth in all_depths}
     for element, element_info in elements_data.items():
         for point in element_info['data']:
@@ -715,7 +706,7 @@ def calculate_processed_data_static(elements_data, column_name, fluence_per_cm2=
 
     processed_data = {}
 
-    for element, element_info in list(elements_data.items()) + list(extra_elements.items()):
+    for element, element_info in elements_data.items():
         value_by_depth = {}
         for point in element_info['data']:
             value_by_depth[point['depth']] = value_by_depth.get(point['depth'], 0) + point[column_name]
@@ -815,19 +806,41 @@ def build_symbol_groups(elements_data):
     return groups
 
 
-def synthesize_summed_raw(elements_data, member_keys):
-    """Sum the raw per-depth STOPS/VACANCIES of several components into one series."""
-    combined = {}
-    for k in member_keys:
-        for point in elements_data[k]['data']:
-            d = point['depth']
-            agg = combined.setdefault(d, {'stops': 0.0, 'vacancies': 0.0})
-            agg['stops'] += point.get('stops', 0.0)
-            agg['vacancies'] += point.get('vacancies', 0.0)
-    return [
-        {'depth': d, 'stops': v['stops'], 'vacancies': v['vacancies']}
-        for d, v in sorted(combined.items())
-    ]
+# Every metric of a combined/Σ profile is summed here.
+_SUMMABLE_METRICS = (
+    'raw_value', 'atomic_fraction', 'probability', 'density_per_angstrom', 'concentration'
+)
+
+
+def sum_processed_series(processed_data, member_keys):
+    """Point-wise sum of several already-processed element series.
+
+    A combined (or Σ) profile must be the *superposition* of its members for
+    **every** data type — raw counts, atomic fraction, normalized probability,
+    density and concentration alike — exactly like the dynamic mode, where the
+    combined curve is the sum of the selected element columns.
+
+    Summing the members' processed values (rather than re-normalizing a synthetic
+    summed-raw series) is what makes this correct: normalized probability,
+    density and concentration are each normalized *per element* by that element's
+    own total, so re-processing a summed-raw series would divide by the combined
+    total and push the combined curve *below* its individual parts. Summing the
+    finished metrics keeps the combined ≥ each part, as expected.
+
+    All series produced by :func:`calculate_processed_data_static` share the same
+    sorted depth grid, so a straight index-by-index sum is safe.
+    """
+    members = [processed_data[k] for k in member_keys if k in processed_data]
+    if not members:
+        return []
+    n = len(members[0])
+    out = []
+    for i in range(n):
+        point = {'depth': members[0][i]['depth']}
+        for metric in _SUMMABLE_METRICS:
+            point[metric] = sum(m[i].get(metric, 0.0) for m in members)
+        out.append(point)
+    return out
 
 
 def get_supported_data_types(file_type):
@@ -1103,32 +1116,30 @@ def create_static_mode_interface():
                         if (selected_elements or len(combine_selection) >= 2) and selected_column:
                             column_key = selected_column.lower()
 
-                            # Synthesize raw data for any selected Σ (sum) options.
-                            extra_elements = {}
-                            for sel in selected_elements:
-                                if sel in sum_option_map:
-                                    extra_elements[sel] = {
-                                        'data': synthesize_summed_raw(
-                                            file_data['elements_data'], sum_option_map[sel]
-                                        )
-                                    }
-
-                            # Synthesize the user-defined combination, if any.
-                            combined_key = None
-                            if len(combine_selection) >= 2:
-                                combined_key = f"Combined ({'+'.join(combine_selection)})"
-                                extra_elements[combined_key] = {
-                                    'data': synthesize_summed_raw(
-                                        file_data['elements_data'], combine_selection
-                                    )
-                                }
-
                             processed_data = calculate_processed_data_static(
                                 file_data['elements_data'],
                                 column_key,
                                 fluence,
-                                extra_elements=extra_elements,
                             )
+
+                            # Build Σ (same-symbol) sums and the user-defined
+                            # combination as the point-wise SUM of their members'
+                            # processed metrics, so every data type (raw, atomic
+                            # fraction, probability, density, concentration) is a
+                            # true superposition of the parts — matching dynamic
+                            # mode and keeping the combined ≥ each individual part.
+                            for sel in selected_elements:
+                                if sel in sum_option_map:
+                                    processed_data[sel] = sum_processed_series(
+                                        processed_data, sum_option_map[sel]
+                                    )
+
+                            combined_key = None
+                            if len(combine_selection) >= 2:
+                                combined_key = f"Combined ({'+'.join(combine_selection)})"
+                                processed_data[combined_key] = sum_processed_series(
+                                    processed_data, combine_selection
+                                )
 
                             for sel in selected_elements:
                                 data_to_use = processed_data.get(sel)
