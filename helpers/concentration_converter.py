@@ -18,7 +18,7 @@ LINEAR_PRESETS = {
     "Custom":         None,
 }
 
-DENSITIES_DB_DIR = "../densities_db"
+DENSITIES_DB_DIR = "densities_db"
 FS = 22
 COLORS = ['#2563EB', '#D97706', '#16A34A', '#DC2626',
           '#7C3AED', '#0891B2', '#B45309', '#065F46']
