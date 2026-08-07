@@ -5,6 +5,8 @@ import numpy as np
 from scipy.signal import savgol_filter
 from scipy.ndimage import gaussian_filter1d
 import re
+import io
+import zipfile
 
 
 def parse_experimental_data(file_content, filename):
@@ -745,6 +747,10 @@ def calculate_processed_data_static(elements_data, column_name, fluence_per_cm2=
     return processed_data
 
 
+def safe_filename(text):
+    return re.sub(r'[^A-Za-z0-9._+-]+', '_', str(text)).strip('_')
+
+
 def smooth_data(x, y, method='savgol', window=11, poly_order=3, sigma=2.0):
     if len(y) < window:
         window = len(y) if len(y) % 2 == 1 else len(y) - 1
@@ -1374,6 +1380,8 @@ def create_static_mode_interface():
                     "Gaussian": "gaussian"
                 }
 
+                smoothed_profiles = []
+
                 for idx, data_item in enumerate(compatible_items):
                     depths = np.array([point['depth'] for point in data_item['data']])
                     y_values = np.array([point[y_key] for point in data_item['data']])
@@ -1395,6 +1403,16 @@ def create_static_mode_interface():
                         elif method_key == "gaussian":
                             y_smoothed = smooth_data(depths, y_values, method='gaussian',
                                                      sigma=sigma)
+
+                        smoothed_profiles.append({
+                            'label': data_item['label'],
+                            'filename': data_item['filename'],
+                            'element': data_item['element'],
+                            'column': data_item['column'],
+                            'depths': depths,
+                            'original': np.asarray(y_values),
+                            'smoothed': np.asarray(y_smoothed)
+                        })
 
                         fig.add_trace(go.Scatter(
                             x=depths,
@@ -1476,6 +1494,108 @@ def create_static_mode_interface():
                         "See the message(s) above for why the selected file(s) do not "
                         "support this metric, then pick a different data type."
                     )
+
+                if enable_smoothing and smoothed_profiles:
+                    st.markdown("---")
+                    st.markdown("#### 📥 Download Smoothed Profiles")
+
+                    if smooth_method == "Savitzky-Golay":
+                        smooth_tag = f"savgol_w{window_size}_p{poly_order}"
+                        smooth_desc = f"Savitzky-Golay (window = {window_size}, polynomial order = {poly_order})"
+                    elif smooth_method == "Moving Average":
+                        smooth_tag = f"movavg_w{window_size}"
+                        smooth_desc = f"Moving average (window = {window_size})"
+                    else:
+                        smooth_tag = f"gaussian_sigma{sigma}"
+                        smooth_desc = f"Gaussian (sigma = {sigma})"
+
+                    st.caption(
+                        f"Smoothing: {smooth_desc} • Data type: {plot_data_type} • X axis: {x_label}"
+                    )
+
+                    depth_header = x_label
+                    orig_header = f"{y_label} (original)"
+                    smooth_header = f"{y_label} (smoothed)"
+
+                    profile_frames = []
+                    for profile in smoothed_profiles:
+                        profile_frames.append(pd.DataFrame({
+                            depth_header: profile['depths'],
+                            orig_header: profile['original'],
+                            smooth_header: profile['smoothed']
+                        }))
+
+                    ref_depths = smoothed_profiles[0]['depths']
+                    same_depth_grid = all(
+                        len(p['depths']) == len(ref_depths) and np.allclose(p['depths'], ref_depths)
+                        for p in smoothed_profiles
+                    )
+
+                    if same_depth_grid:
+                        combined_df = pd.DataFrame({depth_header: ref_depths})
+                        for profile in smoothed_profiles:
+                            combined_df[f"{profile['label']} (original)"] = profile['original']
+                            combined_df[f"{profile['label']} (smoothed)"] = profile['smoothed']
+                    else:
+                        stacked = []
+                        for profile, frame in zip(smoothed_profiles, profile_frames):
+                            frame = frame.copy()
+                            frame.insert(0, 'Profile', profile['label'])
+                            stacked.append(frame)
+                        combined_df = pd.concat(stacked, ignore_index=True)
+
+                    zip_buffer = io.BytesIO()
+                    with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
+                        for profile, frame in zip(smoothed_profiles, profile_frames):
+                            member = (
+                                f"{safe_filename(profile['filename'])}_"
+                                f"{safe_filename(profile['element'])}_"
+                                f"{safe_filename(profile['column'])}_"
+                                f"{safe_filename(plot_data_type)}_{smooth_tag}.csv"
+                            )
+                            zf.writestr(member, frame.to_csv(index=False))
+                    zip_buffer.seek(0)
+
+                    dl_col1, dl_col2 = st.columns(2)
+                    with dl_col1:
+                        st.download_button(
+                            label=f"📥 All smoothed profiles as one CSV ({len(smoothed_profiles)})",
+                            data=combined_df.to_csv(index=False),
+                            file_name=f"smoothed_profiles_{safe_filename(plot_data_type)}_{smooth_tag}.csv",
+                            mime="text/csv",
+                            width='stretch',
+                            key="download_all_smoothed_csv"
+                        )
+                        if not same_depth_grid:
+                            st.caption(
+                                "Depth grids differ between profiles, so the combined CSV is written "
+                                "in long format with a 'Profile' column."
+                            )
+
+                    with dl_col2:
+                        st.download_button(
+                            label="📦 All smoothed profiles as ZIP (one CSV per curve)",
+                            data=zip_buffer.getvalue(),
+                            file_name=f"smoothed_profiles_{safe_filename(plot_data_type)}_{smooth_tag}.zip",
+                            mime="application/zip",
+                            width='stretch',
+                            key="download_all_smoothed_zip"
+                        )
+
+                    with st.expander("Download individual smoothed profiles", expanded=False):
+                        for idx, (profile, frame) in enumerate(zip(smoothed_profiles, profile_frames)):
+                            st.download_button(
+                                label=f"📥 {profile['label']} (smoothed)",
+                                data=frame.to_csv(index=False),
+                                file_name=(
+                                    f"{safe_filename(profile['filename'])}_"
+                                    f"{safe_filename(profile['element'])}_"
+                                    f"{safe_filename(profile['column'])}_"
+                                    f"{safe_filename(plot_data_type)}_{smooth_tag}.csv"
+                                ),
+                                mime="text/csv",
+                                key=f"download_smoothed_{idx}_{safe_filename(profile['label'])}"
+                            )
 
                 if st.checkbox("Show Data Table", key="static_show_table"):
                     st.subheader("Selected Data")
