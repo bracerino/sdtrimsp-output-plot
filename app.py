@@ -7,13 +7,72 @@ import re
 import numpy as np
 
 from helpers.density import density_calculator_interface
+from helpers.static_mode import smooth_data as smooth_1d
 
 import zipfile
 import io
 
+# The dynamic mode offers the same smoothing choices as the static mode; the
+# selected method and its parameters travel together as a small settings dict.
+DEFAULT_SMOOTH_SETTINGS = {'method': 'Gaussian', 'window': 11, 'poly_order': 3, 'sigma': 2.0}
+
+
+def apply_smoothing(values, smooth_settings):
+    settings = smooth_settings or DEFAULT_SMOOTH_SETTINGS
+    method = settings.get('method', 'Gaussian')
+    y = np.asarray(values, dtype=float)
+
+    if method == "Savitzky-Golay":
+        return smooth_1d(None, y, method='savgol',
+                         window=settings.get('window') or 11,
+                         poly_order=settings.get('poly_order') or 3)
+    if method == "Moving Average":
+        return smooth_1d(None, y, method='moving_average',
+                         window=settings.get('window') or 9)
+    return smooth_1d(None, y, method='gaussian', sigma=settings.get('sigma') or 2.0)
+
+
+def add_smoothed_columns(df, element_names, smooth_settings, suffixes=('_conc', '_frac', '_dens'),
+                         include_totals=True):
+    # Adds a *_smooth companion for every smoothable column, in place.
+    for elem in element_names:
+        for suffix in suffixes:
+            col = f'{elem}{suffix}'
+            if col in df.columns:
+                df[f'{col}_smooth'] = apply_smoothing(df[col], smooth_settings)
+
+    if include_totals:
+        for col in ('N_total_conc', 'N_total_frac', 'N_total_dens', 'density'):
+            if col in df.columns:
+                df[f'{col}_smooth'] = apply_smoothing(df[col], smooth_settings)
+
+    return df
+
+
+def describe_smoothing(smooth_settings):
+    settings = smooth_settings or DEFAULT_SMOOTH_SETTINGS
+    method = settings.get('method', 'Gaussian')
+    if method == "Savitzky-Golay":
+        return f"Savitzky-Golay (window = {settings.get('window')}, polynomial order = {settings.get('poly_order')})"
+    if method == "Moving Average":
+        return f"Moving average (window = {settings.get('window')})"
+    return f"Gaussian (sigma = {settings.get('sigma')})"
+
+
+def add_original_trace(fig, x_values, y_values, base_name, color, legend_group):
+    # Faint, dotted copy of the unsmoothed curve, drawn underneath its smoothed twin.
+    fig.add_trace(go.Scatter(
+        x=x_values, y=y_values,
+        mode='lines', name=f"{base_name} (original)",
+        line=dict(color=color, width=1, dash='dot'),
+        opacity=0.3,
+        showlegend=True,
+        legendgroup=legend_group
+    ))
+
 
 @st.cache_data(show_spinner=False)
-def create_xy_zip(cache_key, _fluence_data, element_names, depth_col_key, plot_type, smooth_data, smooth_sigma,
+def create_xy_zip(cache_key, _fluence_data, element_names, depth_col_key, plot_type, smooth_data, smooth_settings,
                   selected_elements):
     # _fluence_data is prefixed with an underscore so Streamlit does NOT try to
     # hash the (large) parsed dataset on every rerun. The cheap, hashable
@@ -28,17 +87,7 @@ def create_xy_zip(cache_key, _fluence_data, element_names, depth_col_key, plot_t
             df = pd.DataFrame(fluence_data[fluence])
 
             if smooth_data:
-                try:
-                    from scipy.ndimage import gaussian_filter1d
-                    for elem in element_names:
-                        for suffix in ('_conc', '_frac', '_dens'):
-                            col = f'{elem}{suffix}'
-                            if col in df.columns:
-                                df[f'{col}_smooth'] = gaussian_filter1d(df[col], sigma=smooth_sigma)
-                    if 'density' in df.columns:
-                        df['density_smooth'] = gaussian_filter1d(df['density'], sigma=smooth_sigma)
-                except ImportError:
-                    pass
+                add_smoothed_columns(df, element_names, smooth_settings)
 
             depth = df[depth_col_key].values
 
@@ -87,6 +136,54 @@ def create_xy_zip(cache_key, _fluence_data, element_names, depth_col_key, plot_t
                     zf.writestr(filename, "\n".join(xy_lines))
 
     return zip_buffer.getvalue()
+
+
+@st.cache_data(show_spinner=False)
+def create_smoothed_xy_zip(cache_key, _fluence_data, element_names, depth_col_key, plot_type, smooth_settings,
+                           display_elements, combined_elements):
+    # Same .xy layout as create_xy_zip, but restricted to the curves the single-fluence
+    # plot is currently showing, and always written from the smoothed columns.
+    fluence_data = _fluence_data
+    suffix_map = {
+        "Atomic Fractions": '_frac',
+        "Concentrations (atoms/cm³)": '_conc',
+        "Density (ions/Å)": '_dens'
+    }
+
+    zip_buffer = io.BytesIO()
+    written = 0
+
+    with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
+        for fluence in sorted(fluence_data.keys()):
+            df = pd.DataFrame(fluence_data[fluence])
+            add_smoothed_columns(df, element_names, smooth_settings)
+            depth = df[depth_col_key].values
+
+            def write_xy(name, values):
+                nonlocal written
+                zf.writestr(name, "\n".join(f"{d:.6e}\t{v:.6e}" for d, v in zip(depth, values)))
+                written += 1
+
+            if plot_type not in suffix_map:
+                if 'density_smooth' in df.columns:
+                    write_xy(f"fluence_{fluence:.4f}_total_density_smoothed.xy", df['density_smooth'].values)
+                continue
+
+            suffix = suffix_map[plot_type]
+
+            for elem in display_elements:
+                col = f'{elem}{suffix}_smooth'
+                if col in df.columns:
+                    write_xy(f"fluence_{fluence:.4f}_{elem}_smoothed.xy", df[col].values)
+
+            if combined_elements and len(combined_elements) > 1:
+                cols = [f'{e}{suffix}_smooth' for e in combined_elements if f'{e}{suffix}_smooth' in df.columns]
+                if len(cols) == len(combined_elements):
+                    combo_label = "+".join(combined_elements)
+                    write_xy(f"fluence_{fluence:.4f}_combined_{combo_label}_smoothed.xy",
+                             df[cols].sum(axis=1).values)
+
+    return zip_buffer.getvalue(), written
 
 
 def parse_experimental_data(file_content, filename):
@@ -166,30 +263,40 @@ def create_single_fluence_plots(df, depth_col, depth_label, plot_type, mode, y_a
         colors = ['blue', 'red', 'green', 'orange', 'purple', 'brown', 'pink']
 
         for i, element in enumerate(elements_to_plot):
-            frac_col = f'{element}_frac_smooth' if smooth_data and f'{element}_frac_smooth' in df.columns else f'{element}_frac'
+            use_smooth = smooth_data and f'{element}_frac_smooth' in df.columns
+            frac_col = f'{element}_frac_smooth' if use_smooth else f'{element}_frac'
             if frac_col in df.columns:
-                display_name = f"{element} (smoothed)" if smooth_data and f'{element}_frac_smooth' in df.columns else element
+                display_name = f"{element} (smoothed)" if use_smooth else element
+                color = colors[i % len(colors)]
+                if use_smooth:
+                    add_original_trace(fig, df[depth_col], df[f'{element}_frac'], element, color, element)
                 fig.add_trace(go.Scatter(
                     x=df[depth_col], y=df[frac_col],
                     mode=mode, name=display_name,
-                    line=dict(color=colors[i % len(colors)], width=3),
-                    marker=dict(size=6, color=colors[i % len(colors)])
+                    line=dict(color=color, width=3),
+                    marker=dict(size=6, color=color),
+                    legendgroup=element
                 ))
 
         if selected_elements and len(selected_elements) > 1:
+            raw_combined_frac = df[[f'{elem}_frac' for elem in selected_elements if f'{elem}_frac' in df.columns]].sum(
+                axis=1)
+            combined_base = f'Combined ({"+".join(selected_elements)})'
+
             if smooth_data and all(f'{elem}_frac_smooth' in df.columns for elem in selected_elements):
                 combined_frac = df[[f'{elem}_frac_smooth' for elem in selected_elements]].sum(axis=1)
-                combined_name = f'Combined ({"+".join(selected_elements)}) (smoothed)'
+                combined_name = f'{combined_base} (smoothed)'
+                add_original_trace(fig, df[depth_col], raw_combined_frac, combined_base, 'black', combined_base)
             else:
-                combined_frac = df[[f'{elem}_frac' for elem in selected_elements if f'{elem}_frac' in df.columns]].sum(
-                    axis=1)
-                combined_name = f'Combined ({"+".join(selected_elements)})'
+                combined_frac = raw_combined_frac
+                combined_name = combined_base
 
             fig.add_trace(go.Scatter(
                 x=df[depth_col], y=combined_frac,
                 mode=mode, name=combined_name,
                 line=dict(color='black', width=3, dash='dash'),
-                marker=dict(size=6, color='black')
+                marker=dict(size=6, color='black'),
+                legendgroup=combined_base
             ))
 
         if experimental_data:
@@ -222,30 +329,40 @@ def create_single_fluence_plots(df, depth_col, depth_label, plot_type, mode, y_a
         colors = ['blue', 'red', 'green', 'orange', 'purple', 'brown', 'pink']
 
         for i, element in enumerate(elements_to_plot):
-            conc_col = f'{element}_conc_smooth' if smooth_data and f'{element}_conc_smooth' in df.columns else f'{element}_conc'
+            use_smooth = smooth_data and f'{element}_conc_smooth' in df.columns
+            conc_col = f'{element}_conc_smooth' if use_smooth else f'{element}_conc'
             if conc_col in df.columns:
-                display_name = f"{element} (smoothed)" if smooth_data and f'{element}_conc_smooth' in df.columns else element
+                display_name = f"{element} (smoothed)" if use_smooth else element
+                color = colors[i % len(colors)]
+                if use_smooth:
+                    add_original_trace(fig, df[depth_col], df[f'{element}_conc'], element, color, element)
                 fig.add_trace(go.Scatter(
                     x=df[depth_col], y=df[conc_col],
                     mode=mode, name=display_name,
-                    line=dict(color=colors[i % len(colors)], width=3),
-                    marker=dict(size=6, color=colors[i % len(colors)])
+                    line=dict(color=color, width=3),
+                    marker=dict(size=6, color=color),
+                    legendgroup=element
                 ))
 
         if selected_elements and len(selected_elements) > 1:
+            raw_combined_conc = df[[f'{elem}_conc' for elem in selected_elements if f'{elem}_conc' in df.columns]].sum(
+                axis=1)
+            combined_base = f'Combined ({"+".join(selected_elements)})'
+
             if smooth_data and all(f'{elem}_conc_smooth' in df.columns for elem in selected_elements):
                 combined_conc = df[[f'{elem}_conc_smooth' for elem in selected_elements]].sum(axis=1)
-                combined_name = f'Combined ({"+".join(selected_elements)}) (smoothed)'
+                combined_name = f'{combined_base} (smoothed)'
+                add_original_trace(fig, df[depth_col], raw_combined_conc, combined_base, 'black', combined_base)
             else:
-                combined_conc = df[[f'{elem}_conc' for elem in selected_elements if f'{elem}_conc' in df.columns]].sum(
-                    axis=1)
-                combined_name = f'Combined ({"+".join(selected_elements)})'
+                combined_conc = raw_combined_conc
+                combined_name = combined_base
 
             fig.add_trace(go.Scatter(
                 x=df[depth_col], y=combined_conc,
                 mode=mode, name=combined_name,
                 line=dict(color='black', width=3, dash='dash'),
-                marker=dict(size=6, color='black')
+                marker=dict(size=6, color='black'),
+                legendgroup=combined_base
             ))
 
         if experimental_data:
@@ -278,30 +395,40 @@ def create_single_fluence_plots(df, depth_col, depth_label, plot_type, mode, y_a
         colors = ['blue', 'red', 'green', 'orange', 'purple', 'brown', 'pink']
 
         for i, element in enumerate(elements_to_plot):
-            dens_col = f'{element}_dens_smooth' if smooth_data and f'{element}_dens_smooth' in df.columns else f'{element}_dens'
+            use_smooth = smooth_data and f'{element}_dens_smooth' in df.columns
+            dens_col = f'{element}_dens_smooth' if use_smooth else f'{element}_dens'
             if dens_col in df.columns:
-                display_name = f"{element} (smoothed)" if smooth_data and f'{element}_dens_smooth' in df.columns else element
+                display_name = f"{element} (smoothed)" if use_smooth else element
+                color = colors[i % len(colors)]
+                if use_smooth:
+                    add_original_trace(fig, df[depth_col], df[f'{element}_dens'], element, color, element)
                 fig.add_trace(go.Scatter(
                     x=df[depth_col], y=df[dens_col],
                     mode=mode, name=display_name,
-                    line=dict(color=colors[i % len(colors)], width=3),
-                    marker=dict(size=6, color=colors[i % len(colors)])
+                    line=dict(color=color, width=3),
+                    marker=dict(size=6, color=color),
+                    legendgroup=element
                 ))
 
         if selected_elements and len(selected_elements) > 1:
+            raw_combined_dens = df[[f'{elem}_dens' for elem in selected_elements if f'{elem}_dens' in df.columns]].sum(
+                axis=1)
+            combined_base = f'Combined ({"+".join(selected_elements)})'
+
             if smooth_data and all(f'{elem}_dens_smooth' in df.columns for elem in selected_elements):
                 combined_dens = df[[f'{elem}_dens_smooth' for elem in selected_elements]].sum(axis=1)
-                combined_name = f'Combined ({"+".join(selected_elements)}) (smoothed)'
+                combined_name = f'{combined_base} (smoothed)'
+                add_original_trace(fig, df[depth_col], raw_combined_dens, combined_base, 'black', combined_base)
             else:
-                combined_dens = df[[f'{elem}_dens' for elem in selected_elements if f'{elem}_dens' in df.columns]].sum(
-                    axis=1)
-                combined_name = f'Combined ({"+".join(selected_elements)})'
+                combined_dens = raw_combined_dens
+                combined_name = combined_base
 
             fig.add_trace(go.Scatter(
                 x=df[depth_col], y=combined_dens,
                 mode=mode, name=combined_name,
                 line=dict(color='black', width=3, dash='dash'),
-                marker=dict(size=6, color='black')
+                marker=dict(size=6, color='black'),
+                legendgroup=combined_base
             ))
 
         if experimental_data:
@@ -332,14 +459,19 @@ def create_single_fluence_plots(df, depth_col, depth_label, plot_type, mode, y_a
     else:
         fig = go.Figure()
 
-        density_col = 'density_smooth' if smooth_data and 'density_smooth' in df.columns else 'density'
-        display_name = "Total Density (smoothed)" if smooth_data and 'density_smooth' in df.columns else "Total Density"
+        use_smooth = smooth_data and 'density_smooth' in df.columns
+        density_col = 'density_smooth' if use_smooth else 'density'
+        display_name = "Total Density (smoothed)" if use_smooth else "Total Density"
+
+        if use_smooth:
+            add_original_trace(fig, df[depth_col], df['density'], "Total Density", 'purple', "Total Density")
 
         fig.add_trace(go.Scatter(
             x=df[depth_col], y=df[density_col],
             mode=mode, name=display_name,
             line=dict(color='purple', width=3),
-            marker=dict(size=6, color='purple')
+            marker=dict(size=6, color='purple'),
+            legendgroup="Total Density"
         ))
 
         if experimental_data:
@@ -369,194 +501,68 @@ def create_single_fluence_plots(df, depth_col, depth_label, plot_type, mode, y_a
 
 
 def create_multi_fluence_comparison(fluence_data, selected_fluences, depth_col, depth_label, plot_type, mode,
-                                    y_axis_scale, element_names, smooth_data, smooth_sigma, selected_elements):
+                                    y_axis_scale, element_names, smooth_data, smooth_settings, selected_elements):
     comparison_fig = go.Figure()
     colors = ['blue', 'red', 'green', 'orange', 'purple', 'brown', 'pink', 'gray', 'olive', 'cyan']
+
+    suffix_map = {
+        "Atomic Fractions": '_frac',
+        "Concentrations (atoms/cm³)": '_conc',
+        "Density (ions/Å)": '_dens'
+    }
 
     for i, fluence in enumerate(selected_fluences):
         data_comp = fluence_data[fluence]
         df_comp = pd.DataFrame(data_comp)
 
         if smooth_data:
-            try:
-                from scipy.ndimage import gaussian_filter1d
-
-                for elem in element_names:
-                    if f'{elem}_conc' in df_comp.columns:
-                        df_comp[f'{elem}_conc_smooth'] = gaussian_filter1d(df_comp[f'{elem}_conc'], sigma=smooth_sigma)
-                    if f'{elem}_frac' in df_comp.columns:
-                        df_comp[f'{elem}_frac_smooth'] = gaussian_filter1d(df_comp[f'{elem}_frac'], sigma=smooth_sigma)
-                    if f'{elem}_dens' in df_comp.columns:
-                        df_comp[f'{elem}_dens_smooth'] = gaussian_filter1d(df_comp[f'{elem}_dens'], sigma=smooth_sigma)
-
-                if 'N_total_conc' in df_comp.columns:
-                    df_comp['N_total_conc_smooth'] = gaussian_filter1d(df_comp['N_total_conc'], sigma=smooth_sigma)
-                if 'N_total_frac' in df_comp.columns:
-                    df_comp['N_total_frac_smooth'] = gaussian_filter1d(df_comp['N_total_frac'], sigma=smooth_sigma)
-                if 'N_total_dens' in df_comp.columns:
-                    df_comp['N_total_dens_smooth'] = gaussian_filter1d(df_comp['N_total_dens'], sigma=smooth_sigma)
-                if 'density' in df_comp.columns:
-                    df_comp['density_smooth'] = gaussian_filter1d(df_comp['density'], sigma=smooth_sigma)
-            except ImportError:
-                pass
+            add_smoothed_columns(df_comp, element_names, smooth_settings)
 
         color = colors[i % len(colors)]
 
-        if plot_type == "Atomic Fractions":
+        if plot_type in suffix_map:
+            suffix = suffix_map[plot_type]
+
             if selected_elements and len(selected_elements) > 1:
-                if smooth_data and all(f'{elem}_frac_smooth' in df_comp.columns for elem in selected_elements):
-                    combined_frac = df_comp[[f'{elem}_frac_smooth' for elem in selected_elements]].sum(axis=1)
-                    display_name = f'Combined ({"+".join(selected_elements)}) (Fluence: {fluence:.1f}, smoothed)'
-                else:
-                    combined_frac = df_comp[
-                        [f'{elem}_frac' for elem in selected_elements if f'{elem}_frac' in df_comp.columns]].sum(axis=1)
-                    display_name = f'Combined ({"+".join(selected_elements)}) (Fluence: {fluence:.1f})'
+                base_cols = [f'{elem}{suffix}' for elem in selected_elements if f'{elem}{suffix}' in df_comp.columns]
+                smooth_cols = [f'{col}_smooth' for col in base_cols if f'{col}_smooth' in df_comp.columns]
+                if not base_cols:
+                    continue
 
-                comparison_fig.add_trace(go.Scatter(
-                    x=df_comp[depth_col], y=combined_frac,
-                    mode=mode, name=display_name,
-                    line=dict(color=color, width=3),
-                    marker=dict(size=6, color=color)
-                ))
-            elif selected_elements and len(selected_elements) == 1:
-                elem = selected_elements[0]
-                if smooth_data and f'{elem}_frac_smooth' in df_comp.columns:
-                    frac_data = df_comp[f'{elem}_frac_smooth']
-                    display_name = f'{elem} (Fluence: {fluence:.1f}, smoothed)'
-                else:
-                    frac_data = df_comp[f'{elem}_frac']
-                    display_name = f'{elem} (Fluence: {fluence:.1f})'
-
-                comparison_fig.add_trace(go.Scatter(
-                    x=df_comp[depth_col], y=frac_data,
-                    mode=mode, name=display_name,
-                    line=dict(color=color, width=3),
-                    marker=dict(size=6, color=color)
-                ))
+                raw_values = df_comp[base_cols].sum(axis=1)
+                use_smooth = bool(smooth_data and len(smooth_cols) == len(base_cols))
+                y_values = df_comp[smooth_cols].sum(axis=1) if use_smooth else raw_values
+                base_name = f'Combined ({"+".join(selected_elements)}) (Fluence: {fluence:.1f})'
+                display_name = (f'Combined ({"+".join(selected_elements)}) (Fluence: {fluence:.1f}, smoothed)'
+                                if use_smooth else base_name)
             else:
-                elem = element_names[0] if element_names else 'Ti'
-                if smooth_data and f'{elem}_frac_smooth' in df_comp.columns:
-                    frac_data = df_comp[f'{elem}_frac_smooth']
-                    display_name = f'{elem} (Fluence: {fluence:.1f}, smoothed)'
-                else:
-                    frac_data = df_comp[f'{elem}_frac']
-                    display_name = f'{elem} (Fluence: {fluence:.1f})'
+                elem = selected_elements[0] if selected_elements else (element_names[0] if element_names else 'Ti')
+                raw_col = f'{elem}{suffix}'
+                if raw_col not in df_comp.columns:
+                    continue
 
-                comparison_fig.add_trace(go.Scatter(
-                    x=df_comp[depth_col], y=frac_data,
-                    mode=mode, name=display_name,
-                    line=dict(color=color, width=3),
-                    marker=dict(size=6, color=color)
-                ))
-
-        elif plot_type == "Concentrations (atoms/cm³)":
-            if selected_elements and len(selected_elements) > 1:
-                if smooth_data and all(f'{elem}_conc_smooth' in df_comp.columns for elem in selected_elements):
-                    combined_conc = df_comp[[f'{elem}_conc_smooth' for elem in selected_elements]].sum(axis=1)
-                    display_name = f'Combined ({"+".join(selected_elements)}) (Fluence: {fluence:.1f}, smoothed)'
-                else:
-                    combined_conc = df_comp[
-                        [f'{elem}_conc' for elem in selected_elements if f'{elem}_conc' in df_comp.columns]].sum(axis=1)
-                    display_name = f'Combined ({"+".join(selected_elements)}) (Fluence: {fluence:.1f})'
-
-                comparison_fig.add_trace(go.Scatter(
-                    x=df_comp[depth_col], y=combined_conc,
-                    mode=mode, name=display_name,
-                    line=dict(color=color, width=3),
-                    marker=dict(size=6, color=color)
-                ))
-            elif selected_elements and len(selected_elements) == 1:
-                elem = selected_elements[0]
-                if smooth_data and f'{elem}_conc_smooth' in df_comp.columns:
-                    conc_data = df_comp[f'{elem}_conc_smooth']
-                    display_name = f'{elem} (Fluence: {fluence:.1f}, smoothed)'
-                else:
-                    conc_data = df_comp[f'{elem}_conc']
-                    display_name = f'{elem} (Fluence: {fluence:.1f})'
-
-                comparison_fig.add_trace(go.Scatter(
-                    x=df_comp[depth_col], y=conc_data,
-                    mode=mode, name=display_name,
-                    line=dict(color=color, width=3),
-                    marker=dict(size=6, color=color)
-                ))
-            else:
-                elem = element_names[0] if element_names else 'Ti'
-                if smooth_data and f'{elem}_conc_smooth' in df_comp.columns:
-                    conc_data = df_comp[f'{elem}_conc_smooth']
-                    display_name = f'{elem} (Fluence: {fluence:.1f}, smoothed)'
-                else:
-                    conc_data = df_comp[f'{elem}_conc']
-                    display_name = f'{elem} (Fluence: {fluence:.1f})'
-
-                comparison_fig.add_trace(go.Scatter(
-                    x=df_comp[depth_col], y=conc_data,
-                    mode=mode, name=display_name,
-                    line=dict(color=color, width=3),
-                    marker=dict(size=6, color=color)
-                ))
-
-        elif plot_type == "Density (ions/Å)":
-            if selected_elements and len(selected_elements) > 1:
-                if smooth_data and all(f'{elem}_dens_smooth' in df_comp.columns for elem in selected_elements):
-                    combined_dens = df_comp[[f'{elem}_dens_smooth' for elem in selected_elements]].sum(axis=1)
-                    display_name = f'Combined ({"+".join(selected_elements)}) (Fluence: {fluence:.1f}, smoothed)'
-                else:
-                    combined_dens = df_comp[
-                        [f'{elem}_dens' for elem in selected_elements if f'{elem}_dens' in df_comp.columns]].sum(axis=1)
-                    display_name = f'Combined ({"+".join(selected_elements)}) (Fluence: {fluence:.1f})'
-
-                comparison_fig.add_trace(go.Scatter(
-                    x=df_comp[depth_col], y=combined_dens,
-                    mode=mode, name=display_name,
-                    line=dict(color=color, width=3),
-                    marker=dict(size=6, color=color)
-                ))
-            elif selected_elements and len(selected_elements) == 1:
-                elem = selected_elements[0]
-                if smooth_data and f'{elem}_dens_smooth' in df_comp.columns:
-                    dens_data = df_comp[f'{elem}_dens_smooth']
-                    display_name = f'{elem} (Fluence: {fluence:.1f}, smoothed)'
-                else:
-                    dens_data = df_comp[f'{elem}_dens']
-                    display_name = f'{elem} (Fluence: {fluence:.1f})'
-
-                comparison_fig.add_trace(go.Scatter(
-                    x=df_comp[depth_col], y=dens_data,
-                    mode=mode, name=display_name,
-                    line=dict(color=color, width=3),
-                    marker=dict(size=6, color=color)
-                ))
-            else:
-                elem = element_names[0] if element_names else 'Ti'
-                if smooth_data and f'{elem}_dens_smooth' in df_comp.columns:
-                    dens_data = df_comp[f'{elem}_dens_smooth']
-                    display_name = f'{elem} (Fluence: {fluence:.1f}, smoothed)'
-                else:
-                    dens_data = df_comp[f'{elem}_dens']
-                    display_name = f'{elem} (Fluence: {fluence:.1f})'
-
-                comparison_fig.add_trace(go.Scatter(
-                    x=df_comp[depth_col], y=dens_data,
-                    mode=mode, name=display_name,
-                    line=dict(color=color, width=3),
-                    marker=dict(size=6, color=color)
-                ))
-
+                raw_values = df_comp[raw_col]
+                use_smooth = bool(smooth_data and f'{raw_col}_smooth' in df_comp.columns)
+                y_values = df_comp[f'{raw_col}_smooth'] if use_smooth else raw_values
+                base_name = f'{elem} (Fluence: {fluence:.1f})'
+                display_name = f'{elem} (Fluence: {fluence:.1f}, smoothed)' if use_smooth else base_name
         else:
-            if smooth_data and 'density_smooth' in df_comp.columns:
-                density_data = df_comp['density_smooth']
-                display_name = f'Density (Fluence: {fluence:.1f}, smoothed)'
-            else:
-                density_data = df_comp['density']
-                display_name = f'Density (Fluence: {fluence:.1f})'
+            raw_values = df_comp['density']
+            use_smooth = bool(smooth_data and 'density_smooth' in df_comp.columns)
+            y_values = df_comp['density_smooth'] if use_smooth else raw_values
+            base_name = f'Density (Fluence: {fluence:.1f})'
+            display_name = f'Density (Fluence: {fluence:.1f}, smoothed)' if use_smooth else base_name
 
-            comparison_fig.add_trace(go.Scatter(
-                x=df_comp[depth_col], y=density_data,
-                mode=mode, name=display_name,
-                line=dict(color=color, width=3),
-                marker=dict(size=6, color=color)
-            ))
+        if use_smooth:
+            add_original_trace(comparison_fig, df_comp[depth_col], raw_values, base_name, color, base_name)
+
+        comparison_fig.add_trace(go.Scatter(
+            x=df_comp[depth_col], y=y_values,
+            mode=mode, name=display_name,
+            line=dict(color=color, width=3),
+            marker=dict(size=6, color=color),
+            legendgroup=base_name
+        ))
 
     y_title = "Atomic Fraction" if plot_type == "Atomic Fractions" else \
         "Concentration (atoms/cm³)" if plot_type == "Concentrations (atoms/cm³)" else \
@@ -579,8 +585,8 @@ def create_multi_fluence_comparison(fluence_data, selected_fluences, depth_col, 
     st.plotly_chart(comparison_fig, width='stretch')
 
 
-def perform_fluence_analysis(fluence_data, element_names, fluence_unit, selected_elements, smooth_data, smooth_sigma,
-                             plot_type):
+def perform_fluence_analysis(fluence_data, element_names, fluence_unit, selected_elements, smooth_data,
+                             smooth_settings, plot_type):
     st.subheader("📊 Fluence Analysis Results")
 
     fluence_values = sorted([f for f in fluence_data.keys() if f > 0])
@@ -622,12 +628,6 @@ def perform_fluence_analysis(fluence_data, element_names, fluence_unit, selected
     # (element, fluence) pair — O(elements² × fluences) work on each rerun, which is
     # why a many-fluence file felt slow whenever a control changed. The analysis
     # only ever reads the `data_suffix` column, so we only smooth that suffix.
-    try:
-        from scipy.ndimage import gaussian_filter1d
-    except ImportError:
-        gaussian_filter1d = None
-        smooth_data = False
-
     combined_name = f"Combined_{'_'.join(selected_elements)}" if (
         selected_elements and len(selected_elements) > 1) else None
 
@@ -635,18 +635,16 @@ def perform_fluence_analysis(fluence_data, element_names, fluence_unit, selected
     for fluence in fluence_values:
         df = pd.DataFrame(fluence_data[fluence])
 
-        if smooth_data and gaussian_filter1d is not None:
-            for elem in element_names:
-                col = f'{elem}{data_suffix}'
-                if col in df.columns:
-                    df[f'{col}_smooth'] = gaussian_filter1d(df[col], sigma=smooth_sigma)
+        if smooth_data:
+            add_smoothed_columns(df, element_names, smooth_settings, suffixes=(data_suffix,),
+                                 include_totals=False)
 
         if combined_name:
             base_cols = [f'{elem}{data_suffix}' for elem in selected_elements
                          if f'{elem}{data_suffix}' in df.columns]
             if base_cols:
                 df[f'{combined_name}{data_suffix}'] = df[base_cols].sum(axis=1)
-                if smooth_data and gaussian_filter1d is not None:
+                if smooth_data:
                     smooth_cols = [f'{c}_smooth' for c in base_cols if f'{c}_smooth' in df.columns]
                     if smooth_cols:
                         df[f'{combined_name}{data_suffix}_smooth'] = df[smooth_cols].sum(axis=1)
@@ -1759,20 +1757,73 @@ def main():
             with col_ctrl3:
                 y_axis_scale = st.radio("Y-axis Scale:", ["Linear", "Logarithmic"], key="y_axis_scale")
 
-            smooth_data = False
-            smooth_sigma = 2.0
+            smooth_settings = dict(DEFAULT_SMOOTH_SETTINGS)
 
             st.sidebar.subheader("Data Smoothing")
             smooth_data = st.sidebar.checkbox("Apply Smoothing", value=False)
 
             if smooth_data:
-                smooth_sigma = st.sidebar.slider(
-                    "Smoothing Strength (σ)",
-                    min_value=0.5,
-                    max_value=5.0,
-                    value=2.0,
-                    step=0.1,
-                    help="Higher values = more smoothing"
+                # Same choices as the static mode, so both modes smooth identically.
+                smooth_method = st.sidebar.selectbox(
+                    "Smoothing Method:",
+                    ["Savitzky-Golay", "Moving Average", "Gaussian"],
+                    index=0,
+                    key="dynamic_smooth_method",
+                    help="Savitzky-Golay: Best for preserving peak shapes | Moving Average: Simple smoothing | Gaussian: Smooth but can broaden peaks"
+                )
+
+                window_size = None
+                poly_order = None
+                sigma = None
+
+                if smooth_method == "Savitzky-Golay":
+                    window_size = st.sidebar.slider(
+                        "Window Size:",
+                        min_value=5,
+                        max_value=51,
+                        value=11,
+                        step=2,
+                        key="dynamic_savgol_window",
+                        help="Must be odd. Larger = more smoothing"
+                    )
+                    poly_order = st.sidebar.slider(
+                        "Polynomial Order:",
+                        min_value=1,
+                        max_value=5,
+                        value=3,
+                        key="dynamic_poly_order",
+                        help="Higher = captures more detail but less smoothing"
+                    )
+                elif smooth_method == "Moving Average":
+                    window_size = st.sidebar.slider(
+                        "Window Size:",
+                        min_value=3,
+                        max_value=51,
+                        value=9,
+                        step=2,
+                        key="dynamic_ma_window",
+                        help="Must be odd. Larger = more smoothing"
+                    )
+                else:
+                    sigma = st.sidebar.slider(
+                        "Sigma (σ):",
+                        min_value=0.5,
+                        max_value=10.0,
+                        value=2.0,
+                        step=0.5,
+                        key="dynamic_gauss_sigma",
+                        help="Standard deviation. Larger = more smoothing"
+                    )
+
+                smooth_settings = {
+                    'method': smooth_method,
+                    'window': window_size,
+                    'poly_order': poly_order,
+                    'sigma': sigma
+                }
+                st.sidebar.caption(
+                    f"Applied: {describe_smoothing(smooth_settings)}. "
+                    "The original data stays visible as a faint dotted line under each smoothed curve."
                 )
 
             element_names = debug_info.get('element_names', ['Ti', 'N1', 'N2'])
@@ -1816,16 +1867,55 @@ def main():
             depth_key = 'depth_A' if depth_unit == "Angstroms (Å)" else 'depth_nm'
             zip_buf = create_xy_zip(
                 file_content, fluence_data, element_names, depth_key,
-                plot_type, smooth_data, smooth_sigma, selected_elements
+                plot_type, smooth_data, smooth_settings, selected_elements
             )
             smoothed_tag = "_smoothed" if smooth_data else ""
-            st.sidebar.download_button(
-                label="📦 Download all fluences (.xy ZIP)",
-                data=zip_buf,
-                file_name=f"sdtrimsp_all_fluences{smoothed_tag}.zip",
-                mime="application/zip",
-                type='primary'
-            )
+
+            bulk_col1, bulk_col2 = st.sidebar.columns(2)
+
+            with bulk_col1:
+                st.download_button(
+                    label="📦 All fluences (.xy ZIP)",
+                    data=zip_buf,
+                    file_name=f"sdtrimsp_all_fluences{smoothed_tag}.zip",
+                    mime="application/zip",
+                    type='primary',
+                    width='stretch',
+                    help="Every element plus the combined curve, for every fluence."
+                )
+
+            with bulk_col2:
+                # The single-fluence plot decides which curves are on screen; its
+                # multiselect is rendered further down, so read the value it stored.
+                shown_elements = st.session_state.get("single_plot_elements", element_names)
+                shown_elements = [e for e in shown_elements if e in element_names]
+
+                if smooth_data:
+                    smoothed_zip, smoothed_count = create_smoothed_xy_zip(
+                        file_content, fluence_data, element_names, depth_key,
+                        plot_type, smooth_settings, shown_elements, selected_elements
+                    )
+                else:
+                    smoothed_zip, smoothed_count = b"", 0
+
+                if not smooth_data:
+                    shown_help = "Enable “Apply Smoothing” above to export smoothed curves."
+                elif smoothed_count:
+                    shown_help = (f"Only the curves currently shown in the plot "
+                                  f"({describe_smoothing(smooth_settings)}), for every fluence.")
+                else:
+                    shown_help = "No curves are currently shown in the plot."
+
+                st.download_button(
+                    label="📉 Smoothed, shown curves (.xy ZIP)",
+                    data=smoothed_zip,
+                    file_name="sdtrimsp_all_fluences_smoothed_shown.zip",
+                    mime="application/zip",
+                    type='primary',
+                    width='stretch',
+                    disabled=not (smooth_data and smoothed_count),
+                    help=shown_help
+                )
             data = fluence_data[selected_fluence]
             df = pd.DataFrame(data)
 
@@ -1833,30 +1923,7 @@ def main():
             depth_label = "Depth (Å)" if depth_unit == "Angstroms (Å)" else "Depth (nm)"
 
             if smooth_data:
-                try:
-                    from scipy.ndimage import gaussian_filter1d
-
-                    for element in element_names:
-                        if f'{element}_conc' in df.columns:
-                            df[f'{element}_conc_smooth'] = gaussian_filter1d(df[f'{element}_conc'], sigma=smooth_sigma)
-                        if f'{element}_frac' in df.columns:
-                            df[f'{element}_frac_smooth'] = gaussian_filter1d(df[f'{element}_frac'], sigma=smooth_sigma)
-                        if f'{element}_dens' in df.columns:
-                            df[f'{element}_dens_smooth'] = gaussian_filter1d(df[f'{element}_dens'], sigma=smooth_sigma)
-
-                    if 'N_total_conc' in df.columns:
-                        df['N_total_conc_smooth'] = gaussian_filter1d(df['N_total_conc'], sigma=smooth_sigma)
-                    if 'N_total_frac' in df.columns:
-                        df['N_total_frac_smooth'] = gaussian_filter1d(df['N_total_frac'], sigma=smooth_sigma)
-                    if 'N_total_dens' in df.columns:
-                        df['N_total_dens_smooth'] = gaussian_filter1d(df['N_total_dens'], sigma=smooth_sigma)
-                    if 'density' in df.columns:
-                        df['density_smooth'] = gaussian_filter1d(df['density'], sigma=smooth_sigma)
-
-                except ImportError:
-                    st.warning("⚠️ Smoothing requires scipy. Install with: pip install scipy")
-                    st.warning("Using original data without smoothing.")
-                    smooth_data = False
+                add_smoothed_columns(df, element_names, smooth_settings)
 
             mode = 'lines' if plot_style == "Lines" else 'markers' if plot_style == "Points" else 'lines+markers'
 
@@ -1874,14 +1941,14 @@ def main():
                 )
                 if len(selected_fluences) > 1:
                     create_multi_fluence_comparison(fluence_data, selected_fluences, depth_col, depth_label, plot_type,
-                                                    mode, y_axis_scale, element_names, smooth_data, smooth_sigma,
+                                                    mode, y_axis_scale, element_names, smooth_data, smooth_settings,
                                                     selected_elements)
                 else:
                     st.info("👆 Select at least two fluences above to show a comparison.")
 
             with analysis_tab:
                 perform_fluence_analysis(fluence_data, element_names, fluence_unit, selected_elements, smooth_data,
-                                         smooth_sigma, plot_type)
+                                         smooth_settings, plot_type)
 
             with single_tab:
                 plot_elements = st.multiselect(
