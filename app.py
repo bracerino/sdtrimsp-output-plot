@@ -1414,29 +1414,13 @@ def main():
     st.set_page_config(page_title="SDTrimSP Plotter", layout="wide")
 
     st.markdown(
-        "<h2 style='font-size: 32px;'>📊 SDTrimSP Data Plotter and Helpful Tools</h2>",
-        unsafe_allow_html=True
-    )
-    st.markdown(
         """
-        <div style="
-            display: inline-block;
-            background-color: #ffffff;
-            border-left: 5px solid #2563eb;
-            border-radius: 10px;
-            padding: 10px 16px;
-            margin-top: -4px;
-            margin-bottom: 24px;
-            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.10);
-            color: #111827;
-            font-size: 0.95rem;
-            font-weight: 600;
-        ">
-            <span style="color:#2563eb; font-weight:800;">Release:</span>
-            v0.7.1 &nbsp; | &nbsp;
-            <span style="color:#2563eb; font-weight:800;">Updated:</span>
-            June 2, 2026
-        </div>
+        <h2 style='font-size: 32px; margin-bottom: 20px;'>
+            📊 SDTrimSP Data Plotter and Helpful Tools
+            <span style="font-size: 0.95rem; font-weight: 500; color: #111827;">
+                &nbsp;v0.7.2 &nbsp;|&nbsp; Updated: August 7, 2026
+            </span>
+        </h2>
         """,
         unsafe_allow_html=True
     )
