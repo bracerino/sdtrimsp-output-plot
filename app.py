@@ -16,6 +16,32 @@ import io
 # selected method and its parameters travel together as a small settings dict.
 DEFAULT_SMOOTH_SETTINGS = {'method': 'Gaussian', 'window': 11, 'poly_order': 3, 'sigma': 2.0}
 
+# Upper bound on how many fluence steps of a dynamic output file are kept in
+# memory. Files from long runs can hold hundreds of fluence sections, each with
+# its own full depth profile; loading them all would exhaust the memory of the
+# hosted (online) app. Above this limit only every n-th fluence step is parsed
+# (see parse_sdtrimsp_file), the rest are skipped without being stored.
+MAX_FLUENCE_STEPS = 100
+
+
+def fluence_section_stride(total_sections, max_steps=MAX_FLUENCE_STEPS):
+    """How many fluence sections to advance per kept section, and which to keep.
+
+    Returns (stride, kept_indices); kept_indices is None when everything fits
+    and no subsampling is needed. The first and the last fluence section are
+    always kept, so the profile at the final fluence stays available.
+    """
+    if not max_steps or total_sections <= max_steps:
+        return 1, None
+
+    # One slot is reserved for the always-kept last section, so the evenly
+    # spaced ones must fit into (max_steps - 1) slots.
+    slots = max(max_steps - 1, 1)
+    stride = min(-(-total_sections // slots), total_sections)  # ceil division
+    kept = set(range(0, total_sections, stride))
+    kept.add(total_sections - 1)
+    return stride, kept
+
 
 def apply_smoothing(values, smooth_settings):
     settings = smooth_settings or DEFAULT_SMOOTH_SETTINGS
@@ -820,8 +846,17 @@ def perform_fluence_analysis(fluence_data, element_names, fluence_unit, selected
 
 
 @st.cache_data(show_spinner="Parsing SDTrimSP output…")
-def parse_sdtrimsp_file(file_content):
+def parse_sdtrimsp_file(file_content, max_fluence_steps=MAX_FLUENCE_STEPS):
     lines = file_content.strip().split('\n')
+
+    # Count the fluence sections up front (cheap string scan) so that, for files
+    # with more steps than we can hold in memory, the data rows of the skipped
+    # sections are never turned into dicts in the first place.
+    total_fluence_sections = file_content.count('!--- fluc srrc sbe:')
+    fluence_stride, kept_sections = fluence_section_stride(total_fluence_sections, max_fluence_steps)
+    if kept_sections is not None:
+        print(f"Subsampling fluence steps: keeping every {fluence_stride}. of "
+              f"{total_fluence_sections} sections ({len(kept_sections)} kept)")
 
     fluence_data = {}
     current_fluence = None
@@ -834,6 +869,7 @@ def parse_sdtrimsp_file(file_content):
     data_lines_found = 0
     fluence_lines_found = 0
     metadata_lines_skipped = 0
+    fluence_sections_skipped = 0
 
     print("=== PARSING SDTrimSP FILE ===")
     print(f"Total lines in file: {total_lines}")
@@ -895,6 +931,17 @@ def parse_sdtrimsp_file(file_content):
             if current_fluence is not None and current_data:
                 fluence_data[current_fluence] = current_data.copy()
                 print(f"Saved fluence {current_fluence} with {len(current_data)} data points")
+
+            section_index = fluence_lines_found - 1
+            if kept_sections is not None and section_index not in kept_sections:
+                # Skipped step: leave parsing_data False so its depth rows are
+                # never parsed or stored.
+                fluence_sections_skipped += 1
+                current_fluence = None
+                current_data = []
+                parsing_data = False
+                i += 1
+                continue
 
             try:
                 before_marker = line.split('!---')[0].strip()
@@ -991,7 +1038,11 @@ def parse_sdtrimsp_file(file_content):
         'data_points_per_fluence': {f: len(data) for f, data in fluence_data.items()},
         'header_found': header_found,
         'metadata_lines_skipped': metadata_lines_skipped,
-        'element_names': element_names
+        'element_names': element_names,
+        'total_fluence_sections': total_fluence_sections,
+        'fluence_stride': fluence_stride,
+        'fluence_sections_skipped': fluence_sections_skipped,
+        'max_fluence_steps': max_fluence_steps
     }
 
     print(f"\nFinal summary:")
@@ -1612,6 +1663,23 @@ def main():
         try:
             fluence_data, debug_info = parse_sdtrimsp_file(file_content)
 
+            # Long runs carry more fluence steps than the online app can hold in
+            # memory, so only every n-th step was parsed — say so explicitly.
+            if debug_info.get('fluence_stride', 1) > 1:
+                stride = debug_info['fluence_stride']
+                ordinal = {2: 'second', 3: 'third', 4: 'fourth', 5: 'fifth'}.get(stride, f"{stride}th")
+                st.warning(
+                    f"⚠️ **Only every {ordinal} fluence step was loaded.**\n\n"
+                    f"**{uploaded_file.name}** contains "
+                    f"`{debug_info['total_fluence_sections']}` fluence steps, more than the "
+                    f"`{debug_info['max_fluence_steps']}` steps supported in the online version. "
+                    f"To avoid overloading the available memory, every {ordinal} step was kept "
+                    f"(`{len(fluence_data)}` steps, first and last included) and the remaining "
+                    f"`{debug_info['fluence_sections_skipped']}` were skipped.\n\n"
+                    f"The depth profiles of the loaded steps are complete and unmodified. "
+                    f"To work with all fluence steps, run the app locally."
+                )
+
             with st.expander("🔍 File Parsing Debug Info", expanded=False):
                 col1, col2, col3, col4, col5 = st.columns(5)
                 with col1:
@@ -1624,6 +1692,13 @@ def main():
                     st.metric("Fluence Steps", len(fluence_data))
                 with col5:
                     st.metric("Metadata Skipped", debug_info.get('metadata_lines_skipped', 0))
+
+                if debug_info.get('fluence_stride', 1) > 1:
+                    st.caption(
+                        f"Subsampled: every {debug_info['fluence_stride']}. of "
+                        f"{debug_info['total_fluence_sections']} fluence steps was loaded, "
+                        f"{debug_info['fluence_sections_skipped']} were skipped."
+                    )
 
                 if debug_info['fluence_values']:
                     st.info(f"Found fluence values: {[f'{x:.1f}' for x in debug_info['fluence_values']]}")
