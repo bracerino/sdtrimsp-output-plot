@@ -21,7 +21,7 @@ DEFAULT_SMOOTH_SETTINGS = {'method': 'Gaussian', 'window': 11, 'poly_order': 3, 
 # its own full depth profile; loading them all would exhaust the memory of the
 # hosted (online) app. Above this limit only every n-th fluence step is parsed
 # (see parse_sdtrimsp_file), the rest are skipped without being stored.
-MAX_FLUENCE_STEPS = 100
+MAX_FLUENCE_STEPS = 200
 
 
 def fluence_section_stride(total_sections, max_steps=MAX_FLUENCE_STEPS):
