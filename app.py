@@ -1187,7 +1187,9 @@ def display_dynamic_sputter_yields_section():
         "Components of the same element are summed into a per-element yield, but each component is also "
         "available separately — so when the projectile and the target share an element (e.g. implanting N "
         "into a target that already contains N), you can plot the implanted-N and target-N yields on their own, "
-        "not only their sum. The total yield sums all components."
+        "not only their sum. The total yield sums all components. "
+        "Several files can be loaded at once — each one then gets its own plot, plus a combined "
+        "comparison graph overlaying all of them."
     )
 
     ups = st.file_uploader(
@@ -1195,8 +1197,9 @@ def display_dynamic_sputter_yields_section():
         type=['dat', 'txt', 'out', 'log'],
         accept_multiple_files=True,
         key="dynamic_sputter_log",
-        help="Upload one or more run logs (time_run.dat) to compare their sputtering yields in a single graph. "
-             "Per-element sums, individual components, and the total are all selectable."
+        help="Upload one or more run logs (time_run.dat). With several files you can show a separate plot "
+             "per file, a single combined comparison graph, or both. Per-element sums, individual "
+             "components, and the total are all selectable."
     )
 
     # Allow pasting log content directly, in addition to uploading files.
@@ -1294,6 +1297,10 @@ def display_dynamic_sputter_yields_section():
         key="dyn_sputter_series"
     )
 
+    # Selections can survive a change of the uploaded files in session state;
+    # drop any label that no longer exists so the lookups below stay safe.
+    selected = [opt for opt in selected if opt in option_map]
+
     # Fluence-unit conversions, relative to the parsed value in atoms/Å².
     # 1 atom/Å² = 1e16 atoms/cm² = 0.1 × 10¹⁷ atoms/cm².
     flu_unit_factors = {
@@ -1372,8 +1379,34 @@ def display_dynamic_sputter_yields_section():
             return opt.split(' | ', 1)[1]
         return opt
 
-    fig = go.Figure()
-    for idx, opt in enumerate(selected):
+    # With several files loaded the same curves can be shown either overlaid in a
+    # single comparison plot, or in one plot per file (and both at once).
+    if multi:
+        layout_col, axes_col = st.columns([2, 1])
+        with layout_col:
+            plot_layout = st.radio(
+                "Plot layout:",
+                ["Both (per-file + comparison)", "Separate plot per file", "Combined comparison"],
+                index=0,
+                key="dyn_sputter_layout",
+                help="Draw one plot per uploaded/pasted file, a single plot overlaying all files, or both."
+            )
+        with axes_col:
+            common_axes = st.checkbox(
+                "Common axis ranges in per-file plots",
+                value=True,
+                key="dyn_sputter_common_axes",
+                help="Force every per-file plot onto the same x/y ranges so the files can be compared directly."
+            )
+    else:
+        plot_layout = "Combined comparison"
+        common_axes = False
+
+    # Colors are fixed per selected series so a curve keeps the same color in the
+    # per-file plot and in the combined comparison.
+    color_for = {opt: colors[i % len(colors)] for i, opt in enumerate(selected)}
+
+    def add_series(fig, opt, name):
         fname, kind, key = option_map[opt]
         p = parsed_files[fname]
         x_vals = np.array(p['fluences']) * x_factor
@@ -1383,37 +1416,88 @@ def display_dynamic_sputter_yields_section():
             dash = 'dash' if is_total else ('dot' if kind == 'component' else 'solid')
         else:
             dash = line_style
+        color = color_for[opt]
         fig.add_trace(go.Scatter(
             x=x_vals,
             y=y_vals,
             mode=plot_mode,
-            name=series_label(opt, fname, kind, key),
+            name=name,
             line=dict(
-                color=colors[idx % len(colors)],
+                color=color,
                 width=line_width + 1 if is_total else line_width,
                 dash=dash
             ),
             marker=dict(
                 size=marker_size + 1 if is_total else marker_size,
-                color=colors[idx % len(colors)],
+                color=color,
                 symbol=marker_symbol
             )
         ))
 
-    fig.update_layout(
-        title=dict(text="Sputtering Yield vs Fluence", font=dict(size=28, color='black')),
-        xaxis_title=dict(text=x_label, font=dict(size=24, color='black')),
-        yaxis_title=dict(text="Sputtering Yield (atoms/ion)", font=dict(size=24, color='black')),
-        yaxis_type="log" if y_scale == "Logarithmic" else "linear",
-        height=650,
-        hovermode='x unified',
-        font=dict(size=20, color='black'),
-        legend=dict(font=dict(size=16, color='black')),
-        xaxis=dict(tickfont=dict(size=20, color='black')),
-        yaxis=dict(tickfont=dict(size=20, color='black'))
-    )
+    def axis_ranges(opts):
+        """Padded (x_range, y_range) covering all given series, in plot units."""
+        xs, ys = [], []
+        for opt in opts:
+            fname, kind, key = option_map[opt]
+            xs.extend(np.array(parsed_files[fname]['fluences']) * x_factor)
+            ys.extend(series_values(fname, kind, key))
+        if not xs or not ys:
+            return None, None
+        log_y = (y_scale == "Logarithmic")
+        if log_y:
+            ys = [v for v in ys if v > 0]
+            if not ys:
+                return None, None
+        x_lo, x_hi = min(xs), max(xs)
+        y_lo, y_hi = min(ys), max(ys)
+        x_pad = (x_hi - x_lo) * 0.02 or abs(x_hi) * 0.02 or 1.0
+        x_range = [x_lo - x_pad, x_hi + x_pad]
+        if log_y:
+            y_range = [np.log10(y_lo) - 0.1, np.log10(y_hi) + 0.1]
+        else:
+            y_pad = (y_hi - y_lo) * 0.05 or abs(y_hi) * 0.05 or 1.0
+            y_range = [min(0.0, y_lo - y_pad), y_hi + y_pad]
+        return x_range, y_range
 
-    st.plotly_chart(fig, width='stretch')
+    def style_fig(fig, title, x_range=None, y_range=None):
+        fig.update_layout(
+            title=dict(text=title, font=dict(size=28, color='black')),
+            xaxis_title=dict(text=x_label, font=dict(size=24, color='black')),
+            yaxis_title=dict(text="Sputtering Yield (atoms/ion)", font=dict(size=24, color='black')),
+            yaxis_type="log" if y_scale == "Logarithmic" else "linear",
+            height=650,
+            hovermode='x unified',
+            font=dict(size=20, color='black'),
+            legend=dict(font=dict(size=16, color='black')),
+            xaxis=dict(tickfont=dict(size=20, color='black'), range=x_range),
+            yaxis=dict(tickfont=dict(size=20, color='black'), range=y_range)
+        )
+
+    show_separate = plot_layout in ("Separate plot per file", "Both (per-file + comparison)")
+    show_combined = plot_layout in ("Combined comparison", "Both (per-file + comparison)")
+
+    if show_separate:
+        shared_x, shared_y = axis_ranges(selected) if common_axes else (None, None)
+        for fig_idx, fname in enumerate(parsed_files):
+            file_opts = [o for o in selected if option_map[o][0] == fname]
+            if not file_opts:
+                st.info(f"No series selected for **{fname}**.")
+                continue
+            fig_f = go.Figure()
+            for opt in file_opts:
+                add_series(fig_f, opt, opt.split(' | ', 1)[1])
+            style_fig(fig_f, f"Sputtering Yield vs Fluence — {fname}", shared_x, shared_y)
+            st.plotly_chart(fig_f, width='stretch', key=f"dyn_sputter_fig_file_{fig_idx}")
+
+    if show_combined:
+        if show_separate:
+            st.markdown("#### 🔍 Comparison across files")
+        fig = go.Figure()
+        for opt in selected:
+            fname, kind, key = option_map[opt]
+            add_series(fig, opt, series_label(opt, fname, kind, key))
+        style_fig(fig, "Sputtering Yield vs Fluence")
+        st.plotly_chart(fig, width='stretch', key="dyn_sputter_fig_combined")
 
     # Final-value summary for the selected series.
     summary_rows = []
@@ -1449,14 +1533,118 @@ def display_dynamic_sputter_yields_section():
     with st.expander("📋 Sputtering yield data table", expanded=False):
         st.dataframe(sputter_df, width='stretch', hide_index=True)
 
-    st.download_button(
-        label="📥 Download selected sputtering yields as CSV",
-        data=sputter_df.to_csv(index=False),
-        file_name="dynamic_sputtering_yields_vs_fluence.csv",
-        mime="text/csv",
-        key="download_dyn_sputter",
-        type="primary"
-    )
+    # ── Downloads: yield vs fluence, per series / per file / everything ──────
+    def sanitize(name):
+        return re.sub(r'[^A-Za-z0-9._+#=-]+', '_', name).strip('_') or "series"
+
+    def stem(fname):
+        return sanitize(re.sub(r'\.[^.]*$', '', fname))
+
+    unit_tag = {
+        "atoms/Ų": "atoms_per_A2",
+        "atoms/cm²": "atoms_per_cm2",
+        "10¹⁷ atoms/cm²": "1e17_atoms_per_cm2",
+    }[flu_unit]
+
+    def series_xy(opt):
+        """Two-column 'fluence <tab> yield' text for one series, in the selected unit."""
+        fname, kind, key = option_map[opt]
+        xs = np.array(parsed_files[fname]['fluences']) * x_factor
+        ys = series_values(fname, kind, key)
+        return "\n".join(f"{x:.6e}\t{y:.6e}" for x, y in zip(xs, ys))
+
+    def series_csv(opt):
+        """Single-series CSV with the fluence in all three units plus the yield."""
+        fname, kind, key = option_map[opt]
+        p = parsed_files[fname]
+        return pd.DataFrame({
+            'Fluence (atoms/Ų)': p['fluences'],
+            'Fluence (atoms/cm²)': np.array(p['fluences']) * 1e16,
+            'Fluence (10¹⁷ atoms/cm²)': np.array(p['fluences']) * 0.1,
+            'Yield (atoms/ion)': series_values(fname, kind, key),
+        }).to_csv(index=False)
+
+    def file_wide_csv(fname):
+        """One column per selected series of a file, sharing that file's fluence axis."""
+        p = parsed_files[fname]
+        cols = {
+            'Fluence (atoms/Ų)': p['fluences'],
+            'Fluence (atoms/cm²)': np.array(p['fluences']) * 1e16,
+            'Fluence (10¹⁷ atoms/cm²)': np.array(p['fluences']) * 0.1,
+        }
+        for opt in selected:
+            if option_map[opt][0] == fname:
+                cols[opt.split(' | ', 1)[1]] = series_values(*option_map[opt])
+        return pd.DataFrame(cols).to_csv(index=False)
+
+    zip_buffer = io.BytesIO()
+    with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
+        for opt in selected:
+            fname = option_map[opt][0]
+            base = f"{stem(fname)}_{sanitize(opt.split(' | ', 1)[1])}"
+            zf.writestr(f"{base}_vs_fluence_{unit_tag}.xy", series_xy(opt))
+            zf.writestr(f"{base}_vs_fluence.csv", series_csv(opt))
+        for fname in parsed_files:
+            if any(option_map[o][0] == fname for o in selected):
+                zf.writestr(f"{stem(fname)}_all_selected_yields_vs_fluence.csv", file_wide_csv(fname))
+
+    st.markdown("##### 📥 Download yield vs fluence")
+
+    dl_col1, dl_col2 = st.columns(2)
+    with dl_col1:
+        st.download_button(
+            label="📥 All selected yields as CSV (long format)",
+            data=sputter_df.to_csv(index=False),
+            file_name="dynamic_sputtering_yields_vs_fluence.csv",
+            mime="text/csv",
+            key="download_dyn_sputter",
+            width='stretch'
+        )
+    with dl_col2:
+        st.download_button(
+            label="🗜️ All selected yields as ZIP (.xy + .csv per series)",
+            data=zip_buffer.getvalue(),
+            file_name="dynamic_sputtering_yields_vs_fluence.zip",
+            mime="application/zip",
+            key="download_dyn_sputter_zip",
+            help="One two-column .xy file (fluence vs yield, in the selected fluence unit) and one .csv "
+                 "per selected series, plus a wide table per file.",
+            width='stretch'
+        )
+
+    single_col, xy_col, csv_col = st.columns([2, 1, 1])
+    with single_col:
+        single_opt = st.selectbox(
+            "Single series (element, component or total):",
+            selected,
+            key="dyn_sputter_single_dl",
+            help="Pick one element yield, one component or the total to download on its own."
+        )
+    single_base = f"{stem(option_map[single_opt][0])}_{sanitize(single_opt.split(' | ', 1)[1])}"
+    with xy_col:
+        st.markdown("<div style='height:1.9em'></div>", unsafe_allow_html=True)
+        st.download_button(
+            label="📥 .xy",
+            data=series_xy(single_opt),
+            file_name=f"{single_base}_vs_fluence_{unit_tag}.xy",
+            mime="text/plain",
+            key="download_dyn_sputter_single_xy",
+            help=f"Two columns: fluence ({flu_unit}) and yield (atoms/ion).",
+            width='stretch',
+            type="primary"
+        )
+    with csv_col:
+        st.markdown("<div style='height:1.9em'></div>", unsafe_allow_html=True)
+        st.download_button(
+            label="📥 .csv",
+            data=series_csv(single_opt),
+            file_name=f"{single_base}_vs_fluence.csv",
+            mime="text/csv",
+            key="download_dyn_sputter_single_csv",
+            help="Fluence in all three units plus the yield (atoms/ion).",
+            width='stretch',
+            type="primary"
+        )
 
     st.markdown("---")
 
