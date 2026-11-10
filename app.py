@@ -1666,18 +1666,18 @@ def main():
     )
     css = '''
         <style>
-        .stTabs [data-baseweb="tab-list"] button [data-testid="stMarkdownContainer"] p {
+        .stTabs [role="tab"] [data-testid="stMarkdownContainer"] p {
             font-size: 1.15rem !important;
             color: #1e3a8a !important;
             font-weight: 600 !important;
             margin: 0 !important;
         }
 
-        .stTabs [data-baseweb="tab-list"] {
+        .stTabs [role="tablist"] {
             gap: 20px !important;
         }
 
-        .stTabs [data-baseweb="tab-list"] button {
+        .stTabs [role="tab"] {
             background-color: #f0f4ff !important;
             border-radius: 12px !important;
             padding: 8px 16px !important;
@@ -1686,12 +1686,12 @@ def main():
             color: #1e3a8a !important;
         }
 
-        .stTabs [data-baseweb="tab-list"] button:hover {
+        .stTabs [role="tab"]:hover {
             background-color: #dbe5ff !important;
             cursor: pointer;
         }
 
-        .stTabs [data-baseweb="tab-list"] button[aria-selected="true"] {
+        .stTabs [role="tab"][aria-selected="true"] {
             background-color: #e0e7ff !important;
             color: #1e3a8a !important;
             font-weight: 700 !important;
@@ -1702,8 +1702,15 @@ def main():
             border-radius: 12px 12px 0 0 !important; /* keep rounded only on top */
         }
 
-        .stTabs [data-baseweb="tab-list"] button:focus {
+        .stTabs [role="tab"]:focus {
             outline: none !important;
+        }
+
+        /* Hide Streamlit's own red selection bar; the selected tab has its own underline */
+        .stTabs .react-aria-SelectionIndicator,
+        .stTabs [data-baseweb="tab-highlight"],
+        .stTabs [data-baseweb="tab-border"] {
+            display: none !important;
         }
         </style>
         '''
