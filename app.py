@@ -3,6 +3,7 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+import os
 import re
 import numpy as np
 
@@ -1759,7 +1760,7 @@ def main():
         ---
         #### 🔄 Workflow
         """)
-        st.image("images/Workflow2.png", width='content')
+        st.image(os.path.join(os.path.dirname(os.path.abspath(__file__)), "images", "Workflow2.png"), width="content")
         st.markdown("""
         ---
         #### 📤 Input Requirements:
