@@ -2285,4 +2285,76 @@ def main():
                 st.text(f"{i + 1:2d}: {line}")
 
 
+# ---------------------------------------------------------------------------
+# Supporter logos and the publication at the bottom of the sidebar (the same
+# block as in XRDlicious). Computational Materials Science has no separate
+# logo, so a small thumbnail of its cover is shown next to the journal name.
+# ---------------------------------------------------------------------------
+import base64 as _b64
+from pathlib import Path as _Path
+
+_IMAGES_DIR = _Path(__file__).resolve().parent / "images"
+
+# (name, website, logo file, logo height in px)
+SUPPORTERS = [
+    ("FZU – Institute of Physics of the Czech Academy of Sciences",
+     "https://www.fzu.cz/en", "fzu_logo.svg", 34),
+    ("IMPLANT group", "https://implant.fs.cvut.cz/", "implant_logo.png", 44),
+]
+ARTICLE_URL = "https://doi.org/10.1016/j.commatsci.2026.114519"
+ARTICLE_TITLE = ("Lebeda et al. (2026). Interactive Analysis of Static, Dynamic, and "
+                 "Crystalline SDTrimSP Simulations: Application to Nitrogen Ion "
+                 "Implantation into Vanadium. Computational Materials Science")
+
+
+def _image_data_uri(fname):
+    path = _IMAGES_DIR / fname
+    if not path.exists():
+        return None
+    mime = {".svg": "image/svg+xml", ".webp": "image/webp",
+            ".jpg": "image/jpeg", ".jpeg": "image/jpeg"}.get(path.suffix.lower(), "image/png")
+    return f"data:{mime};base64,{_b64.b64encode(path.read_bytes()).decode()}"
+
+
+def _journal_html():
+    cover = _image_data_uri("commatsci_cover.jpg")
+    cover_html = (f'<img src="{cover}" alt="Computational Materials Science cover" '
+                  'style="height:48px;width:auto;flex:none;border-radius:2px;'
+                  'box-shadow:0 1px 3px rgba(0,0,0,0.3);">' if cover else "")
+    bar = "" if cover else "border-left:4px solid #4b5563;padding-left:8px;"
+    badge = (
+        '<span style="display:inline-flex;align-items:center;gap:10px;">'
+        + cover_html +
+        f'<span style="display:inline-block;{bar}line-height:1.1;color:#374151;'
+        'font-family:Helvetica,Arial,sans-serif;">'
+        '<span style="font-size:0.95em;font-weight:600;white-space:nowrap;">Computational</span><br>'
+        '<span style="font-size:0.95em;font-weight:600;white-space:nowrap;">Materials Science</span>'
+        '</span></span>')
+    return (
+        '<div style="font-size:0.85em;opacity:0.8;margin:14px 0 6px 0;">Published in</div>'
+        f'<a href="{ARTICLE_URL}" target="_blank" title="{ARTICLE_TITLE}" '
+        'style="text-decoration:none;">' + badge + '</a>')
+
+
+def render_supporters():
+    logos = []
+    for name, url, fname, height in SUPPORTERS:
+        uri = _image_data_uri(fname)
+        if uri:
+            logos.append(f'<a href="{url}" target="_blank" title="{name}">'
+                         f'<img src="{uri}" alt="{name}" style="height:{height}px;width:auto;"></a>')
+    # Keyed so Streamlit tracks the block by key, not by position: otherwise a
+    # rerun that adds sidebar content above it briefly shows two copies.
+    box = st.sidebar.container(key="sidebar_supporters")
+    box.markdown("---")
+    box.markdown(
+        '<div style="font-size:0.85em;opacity:0.8;margin-bottom:6px;">'
+        'Supported by <b>FZU</b> and the <b>IMPLANT group</b></div>'
+        '<div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;">'
+        + "".join(logos) + '</div>' + _journal_html(),
+        unsafe_allow_html=True,
+    )
+
+
 main()
+render_supporters()
